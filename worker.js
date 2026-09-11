@@ -119,6 +119,23 @@ const ANALYSIS_TOOL = {
   },
 };
 
+// Klein, apart tool-schema voor de globale (cross-categorie) samenvatting
+// — zie GLOBAL_SUMMARY_TOOL hieronder voor de aanleiding.
+const GLOBAL_SUMMARY_TOOL = {
+  name: 'submit_global_summary',
+  description: 'Short cross-category executive summary for a Winsol feedbackloop analysis.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      summary: {
+        type: 'string',
+        description: 'Korte, feitelijke lopende samenvatting (NL, 3-6 zinnen) van hoe Winsol er in deze selectie voor staat: sterke punten en belangrijkste werkpunten, cross-categorie. Enkel gebaseerd op de meegegeven cijfers/labels.',
+      },
+    },
+    required: ['summary'],
+  },
+};
+
 const ALLOWED_ORIGIN = '*';
 
 export default {
@@ -139,6 +156,15 @@ export default {
       body = await request.json();
     } catch {
       return jsonResponse({ error: 'Ongeldige request body.' }, 400);
+    }
+
+    // Aparte, lichte modus voor de "Globaal"-tab in de frontend: krijgt
+    // enkel de al per categorie samengevatte cijfers/labels (geen ruwe
+    // remarks) en schrijft daar een korte lopende tekst bij — dus een
+    // kleine, snelle aanroep bovenop de 7 bestaande categorie-aanroepen,
+    // niet nog eens de volledige analyse.
+    if (body.mode === 'global_summary') {
+      return handleGlobalSummary(body, env);
     }
 
     const category = body.category || 'onbekend';
@@ -205,6 +231,72 @@ function buildPrompt(category, existing, prospecting) {
 function formatRemarks(remarks) {
   if (!remarks || !remarks.length) return '(geen)';
   return remarks.map((r) => `- [${r.name}] ${r.remark}`).join('\n');
+}
+
+async function handleGlobalSummary(body, env) {
+  const categories = Array.isArray(body.categories) ? body.categories : [];
+  const prompt = buildGlobalSummaryPrompt(categories);
+  const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+
+  try {
+    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        tools: [GLOBAL_SUMMARY_TOOL],
+        tool_choice: { type: 'tool', name: 'submit_global_summary' },
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!apiRes.ok) {
+      const errText = await apiRes.text();
+      return jsonResponse({ error: `Claude API fout (${apiRes.status}): ${errText}` }, 502);
+    }
+
+    const data = await apiRes.json();
+    const toolUse = (data.content || []).find((b) => b.type === 'tool_use');
+    if (!toolUse) {
+      return jsonResponse({ error: 'Geen samenvatting ontvangen van Claude.' }, 502);
+    }
+    return jsonResponse({ summary: toolUse.input.summary });
+  } catch (err) {
+    return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
+  }
+}
+
+function buildGlobalSummaryPrompt(categories) {
+  const blocks = categories.map((c) => {
+    const lines = [
+      `## ${c.label}`,
+      `Score: ${c.scoreLabel} (gebaseerd op ${c.sampleSize} van ${c.totalCustomers} bestaande klanten met een uitgesproken opinie)`,
+    ];
+    if (c.topPositive && c.topPositive.length) {
+      lines.push(`Sterke punten: ${c.topPositive.map((p) => `${p.label} (${p.count})`).join('; ')}`);
+    }
+    if (c.topIssues && c.topIssues.length) {
+      lines.push(`Technische meldingen: ${c.topIssues.map((p) => `${p.label} (${p.count})`).join('; ')}`);
+    }
+    if (c.topWishes && c.topWishes.length) {
+      lines.push(`Gewenste features: ${c.topWishes.map((p) => `${p.label} (${p.count})`).join('; ')}`);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
+
+  return [
+    'Je krijgt een cross-categorie samenvatting van een Winsol feedbackloop-analyse (zonwering/schrijnwerk), al per productcategorie samengevat (score, sterke punten, technische meldingen, gewenste features).',
+    'Schrijf een korte, feitelijke lopende samenvatting in het Nederlands (3-6 zinnen) van hoe Winsol er in deze selectie voor staat: waar het sterk staat, en wat de belangrijkste werkpunten zijn, over de categorieën heen.',
+    'Gebruik UITSLUITEND de onderstaande gegevens — verzin geen cijfers, labels of klantnamen die niet letterlijk gegeven zijn.',
+    'Als een score gebaseerd is op weinig klanten (sample klein t.o.v. het totaal), benoem dat expliciet in plaats van de conclusie te stellig te brengen.',
+    '',
+    blocks || '(geen categorieën met data)',
+  ].join('\n');
 }
 
 function corsHeaders() {

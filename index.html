@@ -105,6 +105,32 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 .modal-field-full{flex-direction:column;align-items:stretch;gap:4px;}
 .modal-field-full b{min-width:0;}
 .modal-field-full .narrative{margin:0;}
+
+/* Globale barometer / overzichtstab (cross-categorie) */
+.score-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);}
+.score-row:last-child{border-bottom:none;}
+.score-label{min-width:110px;font-weight:600;font-size:13px;color:var(--ink);}
+.score-track{position:relative;flex:1;height:10px;background:var(--line);border-radius:6px;overflow:hidden;}
+.score-mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--ink-faint);opacity:.5;}
+.score-fill{position:absolute;top:0;bottom:0;border-radius:6px;}
+.score-fill.pos{left:50%;background:var(--ok);}
+.score-fill.neg{right:50%;background:var(--bad);}
+.score-value{min-width:56px;text-align:right;font-size:13px;font-weight:700;}
+.score-value.pos{color:var(--ok);}
+.score-value.neg{color:var(--bad);}
+.score-warn{font-size:11px;color:var(--ink-faint);min-width:120px;}
+.score-list{display:flex;flex-direction:column;gap:2px;}
+.ranked-row{display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);}
+.ranked-row:last-child{border-bottom:none;}
+.ranked-cat{flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:2px 9px;font-size:11px;color:var(--ink-soft);white-space:nowrap;}
+.ranked-text{flex:1;min-width:0;font-size:13px;color:var(--ink-soft);}
+.benchmark-row{display:flex;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline;flex-wrap:wrap;}
+.benchmark-row:last-child{border-bottom:none;}
+.benchmark-cat{min-width:110px;font-weight:600;color:var(--ink);}
+.benchmark-col{color:var(--ink-soft);}
+.benchmark-col b{color:var(--ink-faint);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.02em;margin-right:4px;}
+#globalSummaryText{font-size:13.5px;color:var(--ink-soft);line-height:1.55;margin:0;}
+#globalSummaryText.loading{color:var(--ink-faint);font-style:italic;}
 </style>
 </head>
 <body>

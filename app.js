@@ -463,7 +463,12 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
     else failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
   }
 
-  renderResults(agg, aiCategories);
+  // Globaal overzicht (barometer) — volledig client-side uit de resultaten
+  // hierboven, geen extra AI-aanroep nodig. Enkel de korte samenvattende
+  // tekst erbij (loadGlobalSummary) is 1 kleine extra aanroep, en die laadt
+  // apart/asynchroon zodat de rest van de resultaten niet hoeft te wachten.
+  const globalOverview = buildGlobalOverview(agg, aiCategories);
+  renderResults(agg, aiCategories, globalOverview);
   hideProgress();
   const filterNote = filteredRows.length === parsedRows.length
     ? `${parsedRows.length} rijen`
@@ -474,6 +479,7 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
     setStatus(`Analyse voltooid op basis van ${filterNote}.`);
   }
   analyzeBtn.disabled = false;
+  if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
 });
 
 function showProgress(done, total) {
@@ -488,27 +494,44 @@ function hideProgress() {
   document.getElementById('progressBar').hidden = true;
 }
 
-function renderResults(agg, aiCategories) {
+function activateTab(tabEl, sectionId) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+  document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
+  tabEl.classList.add('active');
+  document.getElementById(sectionId).classList.add('active');
+}
+
+function renderResults(agg, aiCategories, globalOverview) {
   const tabsEl = document.getElementById('tabs');
   const sectionsEl = document.getElementById('sections');
   tabsEl.innerHTML = '';
   sectionsEl.innerHTML = '';
   const cats = Object.keys(CATEGORY_LABELS);
 
-  cats.forEach((cat, i) => {
+  // "Globaal" eerst en actief bij openen — de barometer is het gevraagde
+  // startpunt (score/werkpunten/sterke punten cross-categorie) vóór je in
+  // een specifieke categorie duikt.
+  const globalTab = document.createElement('div');
+  globalTab.className = 'tab active';
+  globalTab.textContent = 'Globaal';
+  globalTab.onclick = () => activateTab(globalTab, 'section-global');
+  tabsEl.appendChild(globalTab);
+
+  const globalSection = document.createElement('div');
+  globalSection.className = 'section active';
+  globalSection.id = 'section-global';
+  globalSection.innerHTML = renderGlobalSection(globalOverview);
+  sectionsEl.appendChild(globalSection);
+
+  cats.forEach((cat) => {
     const tab = document.createElement('div');
-    tab.className = 'tab' + (i === 0 ? ' active' : '');
+    tab.className = 'tab';
     tab.textContent = CATEGORY_LABELS[cat];
-    tab.onclick = () => {
-      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('section-' + cat).classList.add('active');
-    };
+    tab.onclick = () => activateTab(tab, 'section-' + cat);
     tabsEl.appendChild(tab);
 
     const section = document.createElement('div');
-    section.className = 'section' + (i === 0 ? ' active' : '');
+    section.className = 'section';
     section.id = 'section-' + cat;
     const stats = agg[cat];
     const ai = (aiCategories && aiCategories[cat]) || {};
@@ -560,6 +583,218 @@ function renderResults(agg, aiCategories) {
 // wél nodig, anders breekt het attribuut. Vandaar een aparte helper.
 function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+/* --- Globale barometer (cross-categorie) ---------------------------------
+ * Volledig opgebouwd uit de al opgehaalde per-categorie resultaten (agg +
+ * aiCategories) — geen extra AI-aanroep nodig voor de cijfers zelf. Enkel
+ * de lopende samenvattende tekst (loadGlobalSummary) is 1 kleine extra,
+ * apart ladende aanroep naar de Worker (mode: 'global_summary').
+ *
+ * Score per categorie is bewust gebaseerd op AANTAL UNIEKE KLANTEN achter
+ * positieve/negatieve thema's, niet op aantal thema's — anders weegt 1
+ * spraakzame klant met meerdere thema's even zwaar als 4 verschillende
+ * klanten (exact het schijnconsensus-probleem dat we bij Home/VIJVERMAN
+ * zagen). "sampleSize" (hoeveel klanten er effectief een mening in zitten,
+ * t.o.v. totalCustomers) laat toe om een score met weinig onderliggende
+ * data zichtbaar te markeren i.p.v. hem even stellig te tonen.
+ */
+function buildGlobalOverview(agg, aiCategories) {
+  const cats = Object.keys(CATEGORY_LABELS);
+  const perCategory = [];
+  const allIssues = [];
+  const allWishes = [];
+  const allPositive = [];
+  const allBarriers = [];
+  const benchmarks = [];
+  let totalPotential = 0;
+  let totalProspects = 0;
+
+  for (const cat of cats) {
+    const label = CATEGORY_LABELS[cat];
+    const stats = agg[cat];
+    const ai = (aiCategories && aiCategories[cat]) || {};
+    const existingAi = ai.existing_customers || {};
+    const prospAi = ai.prospecting || {};
+    const themes = existingAi.themes || [];
+
+    const posSet = new Set();
+    const negSet = new Set();
+    const anySet = new Set();
+    for (const t of themes) {
+      for (const n of (t.customers || [])) {
+        anySet.add(n);
+        if (t.sentiment === 'positive') posSet.add(n);
+        if (t.sentiment === 'negative') negSet.add(n);
+      }
+    }
+    const sampleSize = anySet.size;
+    const totalCustomers = stats.existing.customers.length;
+    const score = sampleSize ? (posSet.size - negSet.size) / sampleSize : null;
+
+    perCategory.push({ cat, label, score, sampleSize, totalCustomers });
+
+    for (const t of themes) {
+      if (t.sentiment === 'positive') allPositive.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    }
+    for (const t of (existingAi.technical_issues || [])) {
+      allIssues.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    }
+    for (const t of (existingAi.feature_requests || [])) {
+      allWishes.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    }
+    for (const t of (prospAi.barriers || [])) {
+      allBarriers.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    }
+
+    totalPotential += stats.prospecting.potentialSum || 0;
+    totalProspects += stats.prospecting.customers.length;
+
+    if (existingAi.benchmark_product || existingAi.benchmark_price) {
+      benchmarks.push({ cat, label, product: existingAi.benchmark_product || '—', price: existingAi.benchmark_price || '—' });
+    }
+  }
+
+  const byCountDesc = (a, b) => b.count - a.count;
+  allIssues.sort(byCountDesc);
+  allWishes.sort(byCountDesc);
+  allPositive.sort(byCountDesc);
+  allBarriers.sort(byCountDesc);
+
+  return {
+    perCategory,
+    topIssues: allIssues.slice(0, 8),
+    topWishes: allWishes.slice(0, 8),
+    topPositive: allPositive.slice(0, 8),
+    topBarriers: allBarriers.slice(0, 8),
+    totalPotential,
+    totalProspects,
+    benchmarks,
+  };
+}
+
+function renderGlobalSection(overview) {
+  const scoreRows = overview.perCategory.map((c) => {
+    if (c.score === null) {
+      return `
+        <div class="score-row">
+          <span class="score-label">${escapeHtml(c.label)}</span>
+          <div class="score-track"><div class="score-mid"></div></div>
+          <span class="score-value">—</span>
+          <span class="score-warn">0/${c.totalCustomers}</span>
+        </div>`;
+    }
+    const pct = Math.round(Math.abs(c.score) * 50);
+    const positive = c.score >= 0;
+    const fillStyle = positive ? `left:50%;width:${pct}%;` : `left:${50 - pct}%;width:${pct}%;`;
+    const lowSample = c.totalCustomers > 0 && c.sampleSize / c.totalCustomers < 0.3;
+    return `
+      <div class="score-row">
+        <span class="score-label">${escapeHtml(c.label)}</span>
+        <div class="score-track">
+          <div class="score-mid"></div>
+          <div class="score-fill ${positive ? 'pos' : 'neg'}" style="${fillStyle}"></div>
+        </div>
+        <span class="score-value ${positive ? 'pos' : 'neg'}">${positive ? '+' : ''}${Math.round(c.score * 100)}%</span>
+        <span class="score-warn"${lowSample ? ' title="Gebaseerd op weinig klantopinies"' : ''}>${c.sampleSize}/${c.totalCustomers}</span>
+      </div>`;
+  }).join('');
+
+  const rankedList = (items, badgeClass, badgeText, emptyText) => {
+    if (!items.length) return `<p class="narrative">${emptyText}</p>`;
+    return items.map((it) => `
+      <div class="ranked-row">
+        <span class="ranked-cat">${escapeHtml(it.label)}</span>
+        <span class="ranked-text">${escapeHtml(it.text)}</span>
+        <span class="pill ${badgeClass}">${badgeText}</span>
+        <span class="count-badge">${it.count}</span>
+      </div>`).join('');
+  };
+
+  const benchmarkRows = overview.benchmarks.map((b) => `
+    <div class="benchmark-row">
+      <div class="benchmark-cat">${escapeHtml(b.label)}</div>
+      <div class="benchmark-col"><b>Product</b><p class="narrative">${escapeHtml(b.product)}</p></div>
+      <div class="benchmark-col"><b>Prijs</b><p class="narrative">${escapeHtml(b.price)}</p></div>
+    </div>`).join('');
+
+  return `
+    <div class="card">
+      <h2 class="part-title">Globale barometer</h2>
+      <p class="part-sub">Score per categorie op basis van unieke klanten met een uitgesproken opinie (niet op aantal thema's) — zo trekt 1 spraakzame klant de score niet scheef. Het getal rechts (bv. "3/23") toont op hoeveel klanten de score effectief steunt.</p>
+      <p class="narrative" id="globalSummaryText">Samenvatting wordt gegenereerd...</p>
+      <div class="score-list">${scoreRows}</div>
+    </div>
+    <div class="card">
+      <h2 class="part-title">Werkpunten</h2>
+      <p class="part-sub">Technische meldingen en gewenste features, over alle categorieën heen, gesorteerd op aantal klanten.</p>
+      ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische meldingen gerapporteerd.')}
+      ${rankedList(overview.topWishes, 'request', 'wens', 'Geen gewenste features gerapporteerd.')}
+    </div>
+    <div class="card">
+      <h2 class="part-title">Sterke punten</h2>
+      <p class="part-sub">Meest gedragen positieve thema's, over alle categorieën heen.</p>
+      ${rankedList(overview.topPositive, 'positive', 'positief', "Geen uitgesproken positieve thema's.")}
+    </div>
+    <div class="card">
+      <h2 class="part-title">Prospecting — totaal</h2>
+      <div class="stat-row">
+        <div class="stat"><b>${overview.totalProspects}</b><span>prospects (alle categorieën)</span></div>
+        <div class="stat"><b>&euro;${Math.round(overview.totalPotential).toLocaleString('nl-BE')}</b><span>totaal potentieel (schatting)</span></div>
+      </div>
+      <h2 class="part-title" style="margin-top:16px;">Grootste drempels</h2>
+      ${rankedList(overview.topBarriers, 'neutral', 'drempel', 'Geen drempels gerapporteerd.')}
+    </div>
+    <div class="card">
+      <h2 class="part-title">Benchmark-snapshot</h2>
+      ${benchmarkRows || '<p class="narrative">Geen benchmarkdata beschikbaar.</p>'}
+    </div>
+  `;
+}
+
+// Lichte, aparte AI-aanroep voor de lopende samenvattende tekst bovenaan de
+// barometer — krijgt enkel de al samengevatte cijfers/labels (geen ruwe
+// remarks), en laadt onafhankelijk van de rest zodat de 7 categorie-tabs
+// er niet op moeten wachten.
+async function loadGlobalSummary(overview) {
+  const el = document.getElementById('globalSummaryText');
+  if (!el) return;
+  el.classList.add('loading');
+  const categories = overview.perCategory
+    .filter((c) => c.score !== null || c.totalCustomers > 0)
+    .map((c) => ({
+      label: c.label,
+      scoreLabel: c.score === null ? 'onvoldoende data' : `${c.score >= 0 ? '+' : ''}${Math.round(c.score * 100)}%`,
+      sampleSize: c.sampleSize,
+      totalCustomers: c.totalCustomers,
+      topPositive: overview.topPositive.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
+      topIssues: overview.topIssues.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
+      topWishes: overview.topWishes.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
+    }));
+
+  try {
+    const res = await fetch(ANALYZE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'global_summary', categories }),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const errBody = await res.json();
+        detail = errBody.error || '';
+      } catch {
+        // geen JSON-body — geen detail beschikbaar
+      }
+      throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
+    }
+    const data = await res.json();
+    el.textContent = data.summary || 'Geen samenvatting beschikbaar.';
+  } catch (err) {
+    el.textContent = 'Samenvatting kon niet geladen worden (' + err.message + ').';
+  } finally {
+    el.classList.remove('loading');
+  }
 }
 
 // Eén klikbare klantnaam — opent de brondata-popup (openCustomerModal) via

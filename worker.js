@@ -109,7 +109,7 @@ export default {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 8192,
+          max_tokens: 16000,
           tools: [ANALYSIS_TOOL],
           tool_choice: { type: 'tool', name: 'submit_analysis' },
           messages: [{ role: 'user', content: prompt }],

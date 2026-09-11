@@ -52,7 +52,11 @@ const POTENTIAL_MIDPOINTS = {
 // Max. aantal opmerkingen per categorie/deel dat naar de AI gaat voor de
 // kwalitatieve synthese (kost/prompt-grootte begrenzen). Telt niet mee voor
 // de harde cijfers (aantallen, potentieel) — die gebruiken altijd alle rijen.
-const MAX_REMARKS_TO_AI = 300;
+// Met 5 categorieën x 2 delen kan dit snel oplopen (een rij kan nu in
+// meerdere categorieën tegelijk vallen); te hoog gaf een 502 (prompt te
+// groot/te traag). 60 blijft ruim voldoende om terugkerende thema's te
+// herkennen.
+const MAX_REMARKS_TO_AI = 60;
 
 let parsedRows = [];
 
@@ -206,7 +210,16 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
         }])),
       }),
     });
-    if (!res.ok) throw new Error(`Server antwoordde met status ${res.status}`);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const errBody = await res.json();
+        detail = errBody.error || '';
+      } catch {
+        // response was not JSON (bv. een Cloudflare-foutpagina) — geen detail beschikbaar
+      }
+      throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
+    }
     const data = await res.json();
     renderResults(agg, data.categories);
     setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen.`);

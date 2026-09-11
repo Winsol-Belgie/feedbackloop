@@ -63,7 +63,7 @@ npm install
 npx wrangler login
 
 npx wrangler deploy
-# → toont de *.workers.dev-URL, bv. https://feedbackloop-analyze.<jouw-subdomain>.workers.dev
+# → toont de *.workers.dev-URL (naam komt uit "name" in wrangler.toml)
 
 npx wrangler secret put ANTHROPIC_API_KEY
 # → plak hier je sleutel van console.anthropic.com/settings/keys

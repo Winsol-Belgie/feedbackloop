@@ -46,7 +46,7 @@ const POTENTIAL_MIDPOINTS = {
 
 // URL van de losstaande Cloudflare Worker (zie worker.js). Vul in na
 // je eerste `npx wrangler deploy` — die toont de *.workers.dev-URL.
-const ANALYZE_URL = 'https://feedbackloop-analyze.YOUR-SUBDOMAIN.workers.dev';
+const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
 
 let parsedRows = [];
 

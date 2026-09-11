@@ -1,14 +1,15 @@
-// Cloudflare Pages Function — POST /analyze
-// Receives the client-side aggregated CRM data (counts already computed in
-// the browser) and asks Claude to synthesize the qualitative parts
-// (general impression, recurring themes, benchmark commentary, barriers)
-// per product category. The API key never reaches the browser: it lives
-// only as a Cloudflare Pages secret (ANTHROPIC_API_KEY).
+// Cloudflare Worker — losstaande API voor de feedbackloop-tool.
+// De frontend (index.html/app.js) draait op GitHub Pages; deze Worker is
+// enkel het /analyze-endpoint dat cross-origin wordt aangeroepen (CORS
+// hieronder). De Anthropic API-sleutel staat alleen hier (wrangler secret),
+// nooit in de frontend-code.
 
 const CATEGORY_KEYS = ['screens', 'shutters', 'awnings', 'pergola'];
 
-// Forces Claude to return exactly this shape via tool-use, so the frontend
-// never has to guess-parse free-form text.
+// Zet hier je GitHub Pages origin (bv. "https://winsol-belgie.github.io")
+// in plaats van "*" zodra de Pages-URL definitief is, voor een striktere CORS.
+const ALLOWED_ORIGIN = '*';
+
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
   description: 'Structured feedbackloop analysis per product category.',
@@ -63,57 +64,63 @@ const ANALYSIS_TOOL = {
   },
 };
 
-export async function onRequestPost(context) {
-  const { request, env } = context;
-
-  if (!env.ANTHROPIC_API_KEY) {
-    return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt op de server (Cloudflare Pages > Settings > Environment variables).' }, 500);
-  }
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ error: 'Ongeldige request body.' }, 400);
-  }
-
-  const aggregation = body.aggregation || {};
-  const prompt = buildPrompt(aggregation);
-
-  const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
-
-  try {
-    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        tools: [ANALYSIS_TOOL],
-        tool_choice: { type: 'tool', name: 'submit_analysis' },
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    if (!apiRes.ok) {
-      const errText = await apiRes.text();
-      return jsonResponse({ error: `Claude API fout (${apiRes.status}): ${errText}` }, 502);
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders() });
+    }
+    if (request.method !== 'POST') {
+      return jsonResponse({ error: 'Method not allowed' }, 405);
     }
 
-    const data = await apiRes.json();
-    const toolUse = (data.content || []).find((b) => b.type === 'tool_use');
-    if (!toolUse) {
-      return jsonResponse({ error: 'Geen gestructureerd antwoord ontvangen van Claude.' }, 502);
+    if (!env.ANTHROPIC_API_KEY) {
+      return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt (wrangler secret put ANTHROPIC_API_KEY).' }, 500);
     }
-    return jsonResponse({ categories: toolUse.input });
-  } catch (err) {
-    return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
-  }
-}
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: 'Ongeldige request body.' }, 400);
+    }
+
+    const aggregation = body.aggregation || {};
+    const prompt = buildPrompt(aggregation);
+    const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+
+    try {
+      const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 4096,
+          tools: [ANALYSIS_TOOL],
+          tool_choice: { type: 'tool', name: 'submit_analysis' },
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (!apiRes.ok) {
+        const errText = await apiRes.text();
+        return jsonResponse({ error: `Claude API fout (${apiRes.status}): ${errText}` }, 502);
+      }
+
+      const data = await apiRes.json();
+      const toolUse = (data.content || []).find((b) => b.type === 'tool_use');
+      if (!toolUse) {
+        return jsonResponse({ error: 'Geen gestructureerd antwoord ontvangen van Claude.' }, 502);
+      }
+      return jsonResponse({ categories: toolUse.input });
+    } catch (err) {
+      return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
+    }
+  },
+};
 
 function buildPrompt(aggregation) {
   const parts = ['Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering: screens, rolluiken, luifels, pergolas).',
@@ -134,9 +141,17 @@ function buildPrompt(aggregation) {
   return parts.join('\n');
 }
 
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
   });
 }

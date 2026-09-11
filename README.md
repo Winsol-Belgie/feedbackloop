@@ -5,16 +5,21 @@ krijg een AI-analyse per productcategorie (Screens, Rolluiken, Luifels,
 Pergola's), opgedeeld in **bestaande klanten** en **prospecting** — zoals
 beschreven in `Feedbackloop.docx`.
 
-## Hoe het werkt
+## Architectuur
 
-- `index.html` + `app.js`: pure statische frontend. Leest de Excel client-side
-  in (SheetJS), telt/berekent de harde cijfers (aantallen, potentieel in €)
-  lokaal in de browser — dat gaat dus nooit "gokken".
-- `functions/analyze.js`: een Cloudflare Pages Function (serverless). Krijgt
-  enkel de samengevatte cijfers + de losse tekstopmerkingen binnen, en vraagt
-  Claude om daar een inhoudelijke synthese van te maken (thema's, sentiment,
-  drempels). De Anthropic API-sleutel staat **alleen** op de server, nooit in
-  de browser.
+Zelfde patroon als de andere tools: **frontend op GitHub Pages, enkel de
+API als Worker op Cloudflare.**
+
+- `index.html` + `app.js`: statische frontend, gehost via GitHub Pages.
+  Leest de Excel client-side in (SheetJS), telt/berekent de harde cijfers
+  (aantallen, potentieel in €) lokaal in de browser — dat gaat dus nooit
+  "gokken".
+- `worker.js`: een losstaande Cloudflare Worker. Krijgt enkel de
+  samengevatte cijfers + de losse tekstopmerkingen binnen, en vraagt Claude
+  om daar een inhoudelijke synthese van te maken (thema's, sentiment,
+  drempels). De Anthropic API-sleutel staat **alleen** hier (Worker
+  secret), nooit in de frontend-code. De frontend roept deze Worker
+  cross-origin aan (CORS zit al in `worker.js`).
 
 ## Belangrijke aanname — categorie-mapping
 
@@ -38,51 +43,42 @@ Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =
 prospect), met de kolom `Reason` als fallback.
 
-## Deployen — handmatig via Wrangler
+## Opzetten (eenmalig)
 
-Geen Git-koppeling nodig; deploy gebeurt manueel vanaf je eigen machine met
-de Cloudflare CLI (zoals bij je andere projecten).
+### 1. Frontend — GitHub Pages
 
-> **Let op — Pages, niet Workers:** deze tool is een *Cloudflare Pages*-project
-> (statische site + Pages Functions), geen los Worker-script. Gebruik dus
-> steeds `wrangler pages deploy .` / `wrangler pages ...`, nooit het kale
-> `wrangler deploy` — dat is een ander Cloudflare-product en maakt een lege
-> "Hello World"-Worker aan in plaats van deze tool te deployen.
+Repo → **Settings → Pages** → Source: "Deploy from a branch" → Branch:
+`main`, map `/ (root)` → Save. Dit vereist enkel schrijftoegang op de repo
+zelf, geen org-owner-rechten (in tegenstelling tot de Cloudflare-GitHub-app
+die we eerder probeerden). Na een paar minuten is de tool bereikbaar op
+`https://winsol-belgie.github.io/feedbackloop/`.
 
-Eenmalig:
+### 2. API — Cloudflare Worker
 
 ```bash
 cd app
 npm install
 # Login enkel nodig als je nog GEEN CLOUDFLARE_API_TOKEN in je omgeving hebt
-# staan. Heb je die al (zoals bij je andere projecten), sla deze stap over —
-# wrangler gebruikt die token automatisch en `wrangler login` zal net weigeren.
+# staan. Heb je die al (zoals bij je andere projecten), sla deze stap over.
 npx wrangler login
 
-# Pages-project + secret aanmaken (eenmalig)
-npx wrangler pages project create feedbackloop
-npx wrangler pages secret put ANTHROPIC_API_KEY --project-name=feedbackloop
+npx wrangler deploy
+# → toont de *.workers.dev-URL, bv. https://feedbackloop-analyze.<jouw-subdomain>.workers.dev
+
+npx wrangler secret put ANTHROPIC_API_KEY
 # → plak hier je sleutel van console.anthropic.com/settings/keys
 ```
 
-Bij elke nieuwe versie:
+### 3. Frontend koppelen aan de Worker
+
+Zet de URL uit stap 2 in `app.js`, bovenaan, in `ANALYZE_URL`. Commit en
+push — GitHub Pages update automatisch.
 
 ```bash
-cd app
-npx wrangler pages deploy .
-# of: npm run deploy
+git add app.js
+git commit -m "Koppel frontend aan Worker-URL"
+git push
 ```
-
-Wrangler geeft dan een werkende `*.pages.dev`-URL (niet `*.workers.dev` — dat
-laatste wijst op een per-ongeluk aangemaakte Worker, zie hierboven). Een
-eigen domein koppelen kan later via het Cloudflare-dashboard (Workers & Pages
-→ feedbackloop → Custom domains) — dat vereist geen Git-koppeling en dus ook
-geen org-owner-rechten.
-
-`wrangler.toml` staat al klaar met `pages_build_output_dir = "."`, dus de
-commando's hierboven werken zonder extra argumenten. Optioneel: zet
-`CLAUDE_MODEL` als extra secret/var als je een ander model wil gebruiken dan
-de default in `functions/analyze.js`.
 
 ### Een Anthropic API-sleutel aanmaken
 
@@ -91,16 +87,23 @@ de default in `functions/analyze.js`.
 2. **Settings → API keys → Create key**.
 3. Zorg voor voldoende krediet/budget op de organisatie (Billing).
 4. Kopieer de sleutel meteen (die is nadien niet meer zichtbaar) en gebruik
-   ze bij `wrangler pages secret put` hierboven.
+   ze bij `wrangler secret put` hierboven.
+
+## Bij een nieuwe versie
+
+- Enkel frontend gewijzigd (`index.html`/`app.js`): gewoon `git push` —
+  GitHub Pages update vanzelf.
+- `worker.js` gewijzigd: `npx wrangler deploy` opnieuw draaien.
 
 ## Lokaal testen
 
 ```bash
 cd app
 npm install
-npx wrangler pages dev .
+npx wrangler dev
 ```
 
-Dit start de volledige tool lokaal, inclusief de `/analyze`-function (zet
-`ANTHROPIC_API_KEY` dan even in een lokaal `.env`-bestand, of geef ze mee als
-`--binding ANTHROPIC_API_KEY=sk-...`).
+Dit start de Worker lokaal (zet `ANTHROPIC_API_KEY` dan in een lokaal
+`.dev.vars`-bestand). Zet tijdelijk `ANALYZE_URL` in `app.js` op
+`http://localhost:8787` en open `index.html` rechtstreeks in de browser om
+de frontend te testen.

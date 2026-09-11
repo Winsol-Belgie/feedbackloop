@@ -44,6 +44,10 @@ const POTENTIAL_MIDPOINTS = {
   '150-500k': 325000, '500k-1m': 750000,
 };
 
+// URL van de losstaande Cloudflare Worker (zie worker.js). Vul in na
+// je eerste `npx wrangler deploy` — die toont de *.workers.dev-URL.
+const ANALYZE_URL = 'https://feedbackloop-analyze.YOUR-SUBDOMAIN.workers.dev';
+
 let parsedRows = [];
 
 const dropzone = document.getElementById('dropzone');
@@ -163,7 +167,7 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   const agg = buildAggregation(parsedRows);
   setStatus('AI-analyse loopt, dit kan een minuut duren...');
   try {
-    const res = await fetch('/analyze', {
+    const res = await fetch(ANALYZE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ aggregation: agg }),

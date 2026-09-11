@@ -29,16 +29,27 @@ API als Worker op Cloudflare.**
 ## Categorieën
 
 De 5 tabbladen zijn Screens, Shutters (Rolluiken), Awnings (Luifels),
-Pergola's en Home (Schrijnwerk, incl. Iqon). De CRM-kolommen "Vertical
-shading", "Luifels" en "Home" geven een hint als ze ingevuld zijn, maar zijn
-in de praktijk vaak leeg — daarom wordt voor élke rij ook de vrije tekst
-(kolom `Remark`, plus `Re`/`Reason`) doorzocht op trefwoorden (`KEYWORDS`
-bovenaan `app.js`). Dat is de enige bron voor Pergola en Home (geen
-brondata-kolom die betrouwbaar gevuld is) en de fallback voor de andere
-drie. Pas de trefwoordenlijsten gerust aan als je merkt dat iets verkeerd of
-niet ingedeeld wordt — voor Home staat er nu enkel `schrijnwerk` en `iqon`
-in, vul aan met andere termen die jullie gebruiken (ramen, deuren,
-kozijnen, ...).
+Pergola's en Home (Schrijnwerk, incl. Iqon).
+
+De brondata-kolommen die je zou verwachten (in oudere exports "Vertical
+shading"/"Luifels"/"Home", in recentere exports "Windows"/"Outdoor"/
+"Shutter"/"Screens"/"Garage"/"Awnings") staan in de praktijk zo goed als
+altijd leeg (in een test-export: 0 van de 500 rijen). De classificatie
+gebeurt daarom hoofdzakelijk via trefwoorden in de vrije tekst (kolom
+`Remark`, plus `Re`/`Reason`) — `KEYWORDS` bovenaan `app.js`, inclusief
+Winsol-productnamen die effectief in de opmerkingen voorkomen (Fusion, Zip,
+SO, Verandasol, Lumi, Linasolar, Iqon, ...). De kolommen worden wel nog
+gebruikt als hint zodra ze toevallig gevuld zijn (`COLUMN_HINTS`).
+
+Bewust NIET als trefwoord opgenomen: "zonwering" en "outdoor" (te algemeen,
+dekken meerdere categorieën tegelijk) en "Origin" (komt zowel voor bij ramen
+als bij pergola in de opmerkingen — niet eenduidig genoeg om automatisch
+toe te wijzen). Rijen die geen enkel trefwoord bevatten (vaak zuiver
+administratieve opmerkingen, bv. "niemand aanwezig") tellen bewust nergens
+mee — dat is juist gedrag, geen bug.
+
+Pas de trefwoordenlijsten gerust aan/vul aan — jij kent de productnamen en
+courante schrijfwijzes beter dan ik kon afleiden uit de data.
 
 Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =

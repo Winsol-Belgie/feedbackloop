@@ -25,17 +25,35 @@ const CATEGORY_LABELS = {
   home: 'Home (Schrijnwerk)',
 };
 
+// Trefwoorden zijn afgeleid uit écht voorkomende tekst in de Remarks
+// (inclusief Winsol-productnamen zoals Fusion/Zip/SO/Verandasol/Iqon) — de
+// brondata-kolommen (Windows/Outdoor/Shutter/Screens/Garage/Awnings) staan
+// in de praktijk vrijwel altijd leeg, dus dit is de hoofdbron, niet enkel
+// een fallback. "zonwering" en "outdoor" zijn bewust NIET toegevoegd: die
+// woorden dekken meerdere categorieën tegelijk (te dubbelzinnig om ergens
+// aan toe te wijzen) — evenmin "Origin", dat zowel bij ramen als bij
+// pergola opduikt in de opmerkingen. Vul gerust aan/corrigeer.
 const KEYWORDS = {
-  screens: ['screen', 'zonnescherm', 'doek'],
-  shutters: ['rolluik', 'shutter', 'volet'],
-  awnings: ['luifel', 'markies', 'awning', 'store'],
-  pergola: ['pergola', 'so!', 'zip', 'veranda'],
-  home: ['schrijnwerk', 'iqon'],
+  screens: ['screen', 'screens', 'zonnescherm', 'zonneschermen', 'doek', 'fusion', 'zip', 'vert shading', 'vertical shading'],
+  shutters: ['rolluik', 'rolluiken', 'rolluiklamel', 'shutter', 'shutters', 'volet', 'volets'],
+  awnings: ['luifel', 'luifels', 'markies', 'markiezen', 'awning', 'awnings', 'store', 'knikarm', 'knikarmscherm'],
+  pergola: ['pergola', "pergola's", 'so', 'verandasol', 'lumi', 'linasolar', 'veranda'],
+  home: ['schrijnwerk', 'iqon', 'raam', 'ramen', 'deur', 'deuren', 'poort', 'poorten', 'kozijn', 'kozijnen'],
+};
+
+// Kolom-hints: dekt zowel de kolomnamen uit oudere exports als de huidige
+// (Windows/Outdoor/Shutter/Screens/Garage/Awnings) — worden gebruikt als ze
+// toevallig wél ingevuld zijn, bovenop de trefwoorden hierboven.
+const COLUMN_HINTS = {
+  luifels: 'awnings', awnings: 'awnings',
+  home: 'home', windows: 'home', garage: 'home',
+  shutter: 'shutters',
+  screens: 'screens',
+  outdoor: 'pergola', // zwakke aanname bij gebrek aan betere kolom
 };
 
 // Bron-kolom om het potentieel (€) van een categorie uit te lezen, met
-// generieke "Potential"-kolom als fallback (o.a. voor Pergola, die geen
-// eigen brondata-kolom heeft).
+// generieke "Potential"-kolom als fallback.
 const POTENTIAL_COLUMN = {
   screens: 'vertical shading',
   shutters: 'vertical shading',
@@ -43,6 +61,11 @@ const POTENTIAL_COLUMN = {
   pergola: null,
   home: 'home',
 };
+
+function matchesKeyword(text, word) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
 
 const POTENTIAL_MIDPOINTS = {
   '0-50k': 25000, '50-100k': 75000, '100-150k': 125000,
@@ -134,20 +157,19 @@ function potentialForCategory(row, cat) {
 
 function classifyCategories(row) {
   const cats = new Set();
-  const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
+  const text = [row['remark'], row['re'], row['reason']].join(' ');
 
-  // Kolom-hints, indien ingevuld.
-  if (row['luifels']) cats.add('awnings');
-  if (row['home']) cats.add('home');
+  // Kolom-hints, indien toevallig ingevuld.
+  for (const col in COLUMN_HINTS) {
+    if (row[col]) cats.add(COLUMN_HINTS[col]);
+  }
   if (row['vertical shading']) {
-    cats.add(KEYWORDS.shutters.some((w) => text.includes(w)) ? 'shutters' : 'screens');
+    cats.add(matchesKeyword(text, 'rolluik') || matchesKeyword(text, 'shutter') ? 'shutters' : 'screens');
   }
 
-  // Trefwoorden in de vrije tekst — primaire bron voor Pergola en Home
-  // (schrijnwerk), fallback voor de rest wanneer de kolommen niets
-  // opleveren.
+  // Trefwoorden in de vrije tekst — hoofdbron (zie comment bij KEYWORDS).
   for (const cat of Object.keys(KEYWORDS)) {
-    if (KEYWORDS[cat].some((w) => text.includes(w))) cats.add(cat);
+    if (KEYWORDS[cat].some((w) => matchesKeyword(text, w))) cats.add(cat);
   }
 
   return [...cats];

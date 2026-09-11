@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Winsol Feedbackloop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f3f4f4; --paper-2:#ffffff; --ink:#23292b; --ink-soft:#485155; --ink-faint:#9aa2a4;
+  --line:#e4e7e7; --surface-dark:#2f3638; --accent:#fed501; --accent-ink:#23292b; --info:#0d5475;
+  --ok:#2f7d4f; --ok-bg:#e7f2ec; --warn:#b56b00; --warn-bg:#fbecd5; --bad:#d83b3a; --bad-bg:#fce3e2;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink-soft);font-family:'Poppins',Arial,sans-serif;}
+.wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px;}
+header.hero{background:var(--paper-2);border:1px solid var(--line);border-radius:18px;padding:28px 26px;position:relative;overflow:hidden;margin-bottom:24px;}
+header.hero::before,header.hero::after{content:"";position:absolute;width:70px;height:70px;background:var(--accent);}
+header.hero::before{top:0;left:0;clip-path:polygon(0 0,100% 0,0 100%);}
+header.hero::after{bottom:0;right:0;clip-path:polygon(100% 100%,0 100%,100% 0);}
+header.hero h1{margin:0 0 4px;color:var(--ink);font-weight:700;font-size:26px;}
+header.hero p{margin:0;color:var(--ink-faint);font-size:14px;}
+.card{background:var(--paper-2);border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:20px;}
+.dropzone{border:2px dashed var(--line);border-radius:14px;padding:36px 20px;text-align:center;cursor:pointer;transition:.15s;}
+.dropzone.drag{border-color:var(--accent);background:#fffdf0;}
+.dropzone p{margin:6px 0;}
+.dropzone .fname{color:var(--info);font-weight:600;}
+button{font-family:inherit;}
+.btn{background:var(--accent);color:var(--accent-ink);border:none;border-radius:11px;padding:12px 22px;font-weight:700;font-size:14px;cursor:pointer;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn.secondary{background:var(--surface-dark);color:#fff;}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:16px;}
+.status{font-size:13px;color:var(--ink-faint);}
+.status.err{color:var(--bad);}
+#results{display:none;}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;}
+.tab{background:var(--paper-2);border:1px solid var(--line);border-radius:11px;padding:10px 16px;font-weight:600;font-size:13px;cursor:pointer;color:var(--ink-soft);}
+.tab.active{background:var(--surface-dark);color:#fff;border-color:var(--surface-dark);}
+.section{display:none;}
+.section.active{display:block;}
+.stat-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;}
+.stat{background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:16px 18px;min-width:140px;flex:1;}
+.stat b{display:block;font-size:22px;color:var(--info);font-weight:700;}
+.stat span{font-size:12px;color:var(--ink-faint);}
+h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
+.part-sub{color:var(--ink-faint);font-size:12px;margin:0 0 12px;}
+.theme{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:9px 0;font-size:13px;}
+.theme:last-child{border-bottom:none;}
+.pill{border-radius:20px;padding:3px 10px;font-size:11px;font-weight:700;}
+.pill.positive{background:var(--ok-bg);color:var(--ok);}
+.pill.negative{background:var(--bad-bg);color:var(--bad);}
+.pill.neutral{background:var(--line);color:var(--ink-soft);}
+.count-badge{background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:2px 9px;font-size:11px;color:var(--ink-soft);}
+.narrative{font-size:13.5px;line-height:1.6;white-space:pre-wrap;}
+.info-banner{background:#fff9da;border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px;font-size:12.5px;color:var(--ink);margin-bottom:16px;}
+label.field{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;color:var(--ink-faint);margin-top:10px;}
+input[type=password]{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:inherit;font-size:13px;flex:1;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>Feedbackloop</h1>
+    <p>Upload de CRM-export en laat AI de klantenfeedback analyseren per productcategorie.</p>
+  </header>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <p><strong>Sleep je Excel-bestand hierheen</strong> of klik om te bladeren</p>
+      <p class="fname" id="fname">Geen bestand gekozen</p>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="row">
+      <button class="btn" id="analyzeBtn" disabled>Analyseren</button>
+      <span class="status" id="statusText"></span>
+    </div>
+  </div>
+
+  <div id="results">
+    <div class="tabs" id="tabs"></div>
+    <div id="sections"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

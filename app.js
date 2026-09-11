@@ -59,11 +59,13 @@ const KEYWORDS = {
     'lumisol', 'linasol', 'Luno', 'squaro', 'C1200', 'C2500', 'C550', 'loft', 'combisol', 'acryl (doek)',
     'store banne', 'luifel', 'luifels', 'tent', 'knikarm', 'knikarmscherm',
     'markies', 'markiezen', 'awning', 'awnings',
-    // powerbandarm(en): onderdeel van een luifel (motor-/draagarm) — komt zo
-    // in de echte remarks voor ("vervanging van powerbandarmen" bij een
-    // luifel-herstelling); niet in CATEGORIE_TREFWOORDEN.xlsx, toegevoegd
-    // n.a.v. concrete data. Graag ook bevestigen/overnemen in dat bestand.
-    'powerbandarm', 'powerbandarmen',
+    // powerbandarm(en)/powerband: onderdeel van een luifel (motor-/
+    // draagarm) — "powerband" nu ook toegevoegd in CATEGORIE_TREFWOORDEN.xlsx;
+    // "powerbandarm(en)" blijft ernaast staan, want door de woordgrens
+    // matcht "powerband" alleen niet met de vorm "powerbandarmen" die in de
+    // echte remarks voorkomt (zelfde soort gat als lamel/lamellen).
+    // 4-kabel/2-kabel: geleidingssysteem-varianten, uit CATEGORIE_TREFWOORDEN.xlsx.
+    'powerbandarm', 'powerbandarmen', 'powerband', '4-kabel', '2-kabel',
   ],
   pergola: [
     "SO!", 'L!V', 'Origin', "Orig!n", 'Z!P', 'Z!P Cube',
@@ -79,6 +81,8 @@ const KEYWORDS = {
   ],
   outdoor: [
     'Verandasol', 'Wincube', 'Alubox',
+    // Uit CATEGORIE_TREFWOORDEN.xlsx (aangevuld door Gwenn).
+    'veranda', 'serre', 'uitvalscherm',
   ],
   home: [
     'Iqon', 'PVC', 'Allura', 'Artica', 'steellook', 'Aurora', 'Imperia', 'Qubic', 'Centriq', 'Retro & retrolux', 'Moov',

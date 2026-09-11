@@ -586,8 +586,8 @@ function renderDetailsBlock(label, names, badgeHtml, cat, part) {
   return `
     <details class="theme-details">
       <summary>
-        <span>${escapeHtml(label || '')}</span>
-        <span>${badgeHtml} <span class="count-badge">${names.length}</span></span>
+        <span class="theme-label">${escapeHtml(label || '')}</span>
+        <span class="theme-badges">${badgeHtml} <span class="count-badge">${names.length}</span></span>
       </summary>
       ${inner}
     </details>

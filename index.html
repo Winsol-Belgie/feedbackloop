@@ -49,9 +49,15 @@ h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
 .part-sub{color:var(--ink-faint);font-size:12px;margin:0 0 12px;}
 .theme-details{border-bottom:1px solid var(--line);padding:9px 0;}
 .theme-details:last-child{border-bottom:none;}
-.theme-details summary{display:flex;justify-content:space-between;align-items:center;font-size:13px;cursor:pointer;list-style:none;}
+.theme-details summary{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;font-size:13px;cursor:pointer;list-style:none;}
 .theme-details summary::-webkit-details-marker{display:none;}
 .theme-details summary::before{content:'▸  ';color:var(--ink-faint);}
+/* Label mag naar 2+ lijnen wrappen; de badge-groep rechts (pill + telling)
+   moet dan wél op één lijn blijven staan i.p.v. mee te krimpen en zelf ook
+   te wrappen — vandaar flex:1/min-width:0 op de label en flex-shrink:0 +
+   nowrap op de badges. */
+.theme-details .theme-label{flex:1;min-width:0;}
+.theme-details .theme-badges{flex-shrink:0;white-space:nowrap;display:flex;align-items:center;gap:6px;padding-top:1px;}
 .theme-details[open] summary::before{content:'▾  ';}
 .theme-details .customer-list{margin:8px 0 0;font-size:12.5px;color:var(--ink-soft);}
 .theme-details .customer-list div{padding:5px 2px;border-top:1px dashed var(--line);}

@@ -187,6 +187,7 @@ const filterKlantList = document.getElementById('filterKlantList');
 const filterStatus = document.getElementById('filterStatus');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const statusText = document.getElementById('statusText');
+const analyzeStatus = document.getElementById('analyzeStatus');
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
@@ -203,6 +204,7 @@ fileInput.addEventListener('change', (e) => {
 function handleFile(file) {
   fname.textContent = file.name;
   setStatus('Bestand inlezen...');
+  setAnalyzeStatus('');
   // Nieuw bestand: stap 1 (filter) moet opnieuw doorlopen worden voor er
   // geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
   // (klant/rep uit een vorig bestand) stilzwijgend blijft hangen.
@@ -281,6 +283,14 @@ function normalizeRows(rows) {
 function setStatus(msg, isErr) {
   statusText.textContent = msg;
   statusText.className = 'status' + (isErr ? ' err' : '');
+}
+
+// Status van de AI-analyse (stap 2) hoort naast de "Analyseren"-knop, niet
+// naast "Filteren" — anders lijkt het alsof de voortgang bij de verkeerde
+// knop hoort (zie screenshot van Gwenn).
+function setAnalyzeStatus(msg, isErr) {
+  analyzeStatus.textContent = msg;
+  analyzeStatus.className = 'status' + (isErr ? ' err' : '');
 }
 
 function parsePotential(str) {
@@ -418,7 +428,7 @@ function remarksForAi(customers, targetCat) {
 
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
   analyzeBtn.disabled = true;
-  setStatus('Data structureren...');
+  setAnalyzeStatus('Data structureren...');
   const filteredRows = getFilteredRows();
   const agg = buildAggregation(filteredRows);
   lastAgg = agg;
@@ -479,9 +489,9 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
     ? `${parsedRows.length} rijen`
     : `${filteredRows.length} van ${parsedRows.length} rijen (filter: ${filterRep.value || 'alle reps'} / ${filterKlant.value || 'alle klanten'})`;
   if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
+    setAnalyzeStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${filterNote}.`);
+    setAnalyzeStatus(`Analyse voltooid op basis van ${filterNote}.`);
   }
   analyzeBtn.disabled = false;
   if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
@@ -492,7 +502,7 @@ function showProgress(done, total) {
   const fill = document.getElementById('progressFill');
   bar.hidden = false;
   fill.style.width = Math.round((done / total) * 100) + '%';
-  setStatus(`AI-analyse loopt: ${done}/${total} categorieën verwerkt...`);
+  setAnalyzeStatus(`AI-analyse loopt: ${done}/${total} categorieën verwerkt...`);
 }
 
 function hideProgress() {

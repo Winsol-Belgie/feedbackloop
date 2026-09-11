@@ -741,15 +741,15 @@ function renderGlobalSection(overview) {
       <div class="score-list">${scoreRows}</div>
     </div>
     <div class="card">
+      <h2 class="part-title">Sterke punten</h2>
+      <p class="part-sub">Meest gedragen positieve thema's, over alle categorieën heen.</p>
+      ${rankedList(overview.topPositive, 'positive', 'positief', "Geen uitgesproken positieve thema's.")}
+    </div>
+    <div class="card">
       <h2 class="part-title">Werkpunten</h2>
       <p class="part-sub">Technische meldingen en gewenste features, over alle categorieën heen, gesorteerd op aantal klanten.</p>
       ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische meldingen gerapporteerd.')}
       ${rankedList(overview.topWishes, 'request', 'wens', 'Geen gewenste features gerapporteerd.')}
-    </div>
-    <div class="card">
-      <h2 class="part-title">Sterke punten</h2>
-      <p class="part-sub">Meest gedragen positieve thema's, over alle categorieën heen.</p>
-      ${rankedList(overview.topPositive, 'positive', 'positief', "Geen uitgesproken positieve thema's.")}
     </div>
     <div class="card">
       <h2 class="part-title">Prospecting — totaal</h2>

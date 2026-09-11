@@ -22,13 +22,15 @@ const CATEGORY_LABELS = {
   shutters: 'Shutters (Rolluiken)',
   awnings: 'Awnings (Luifels)',
   pergola: "Pergola's",
+  home: 'Home (Schrijnwerk)',
 };
 
 const KEYWORDS = {
   screens: ['screen', 'zonnescherm', 'doek'],
   shutters: ['rolluik', 'shutter', 'volet'],
   awnings: ['luifel', 'markies', 'awning', 'store'],
-  pergola: ['pergola', 'so!', 'iqon', 'zip', 'veranda'],
+  pergola: ['pergola', 'so!', 'zip', 'veranda'],
+  home: ['schrijnwerk', 'iqon'],
 };
 
 // Bron-kolom om het potentieel (€) van een categorie uit te lezen, met
@@ -39,6 +41,7 @@ const POTENTIAL_COLUMN = {
   shutters: 'vertical shading',
   awnings: 'luifels',
   pergola: null,
+  home: 'home',
 };
 
 const POTENTIAL_MIDPOINTS = {
@@ -113,18 +116,32 @@ function parsePotential(str) {
   return POTENTIAL_MIDPOINTS[key] || 0;
 }
 
+// Categorie-kolom (bv. "Home") bevat niet altijd een herkenbare €-range
+// (soms gewoon de letterlijke tekst "Home") — val dan terug op de
+// generieke "Potential"-kolom in plaats van stil 0 te tellen.
+function potentialForCategory(row, cat) {
+  const col = POTENTIAL_COLUMN[cat];
+  if (col) {
+    const val = parsePotential(row[col]);
+    if (val) return val;
+  }
+  return parsePotential(row['potential']);
+}
+
 function classifyCategories(row) {
   const cats = new Set();
   const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
 
   // Kolom-hints, indien ingevuld.
   if (row['luifels']) cats.add('awnings');
+  if (row['home']) cats.add('home');
   if (row['vertical shading']) {
     cats.add(KEYWORDS.shutters.some((w) => text.includes(w)) ? 'shutters' : 'screens');
   }
 
-  // Trefwoorden in de vrije tekst — primaire bron voor Pergola, fallback
-  // voor de rest wanneer de kolommen niets opleveren.
+  // Trefwoorden in de vrije tekst — primaire bron voor Pergola en Home
+  // (schrijnwerk), fallback voor de rest wanneer de kolommen niets
+  // opleveren.
   for (const cat of Object.keys(KEYWORDS)) {
     if (KEYWORDS[cat].some((w) => text.includes(w))) cats.add(cat);
   }
@@ -159,10 +176,8 @@ function buildAggregation(rows) {
       if (existing) {
         agg[cat].existing.customers.push({ name, remark });
       } else {
-        const col = POTENTIAL_COLUMN[cat];
-        const potStr = (col && row[col]) || row['potential'];
         agg[cat].prospecting.customers.push({ name, remark });
-        agg[cat].prospecting.potentialSum += parsePotential(potStr);
+        agg[cat].prospecting.potentialSum += potentialForCategory(row, cat);
       }
     }
   }

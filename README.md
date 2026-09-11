@@ -2,7 +2,8 @@
 
 Online tool: upload de periodieke CRM-export (Excel) van bezoekrapporten en
 krijg een AI-analyse per productcategorie (Screens, Shutters, Awnings,
-Pergola), opgedeeld in **bestaande klanten** en **prospecting** — zoals
+Pergola, Home), opgedeeld in **bestaande klanten** en **prospecting** —
+zoals
 beschreven in `Feedbackloop.docx`.
 
 ## Architectuur
@@ -23,14 +24,17 @@ API als Worker op Cloudflare.**
 
 ## Categorieën
 
-De 4 tabbladen zijn Screens, Shutters (Rolluiken), Awnings (Luifels) en
-Pergola's. De CRM-kolommen "Vertical shading" en "Luifels" geven een hint
-als ze ingevuld zijn, maar zijn in de praktijk vaak leeg — daarom wordt voor
-élke rij ook de vrije tekst (kolom `Remark`, plus `Re`/`Reason`) doorzocht
-op trefwoorden (`KEYWORDS` bovenaan `app.js`). Dat is de enige bron voor
-Pergola (geen brondata-kolom) en de fallback voor de andere drie. Pas de
-trefwoordenlijsten gerust aan als je merkt dat iets verkeerd of niet
-ingedeeld wordt.
+De 5 tabbladen zijn Screens, Shutters (Rolluiken), Awnings (Luifels),
+Pergola's en Home (Schrijnwerk, incl. Iqon). De CRM-kolommen "Vertical
+shading", "Luifels" en "Home" geven een hint als ze ingevuld zijn, maar zijn
+in de praktijk vaak leeg — daarom wordt voor élke rij ook de vrije tekst
+(kolom `Remark`, plus `Re`/`Reason`) doorzocht op trefwoorden (`KEYWORDS`
+bovenaan `app.js`). Dat is de enige bron voor Pergola en Home (geen
+brondata-kolom die betrouwbaar gevuld is) en de fallback voor de andere
+drie. Pas de trefwoordenlijsten gerust aan als je merkt dat iets verkeerd of
+niet ingedeeld wordt — voor Home staat er nu enkel `schrijnwerk` en `iqon`
+in, vul aan met andere termen die jullie gebruiken (ramen, deuren,
+kozijnen, ...).
 
 Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =

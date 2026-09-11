@@ -1,13 +1,18 @@
 /* Winsol Feedbackloop — client-side logic
  * 1) Parse uploaded CRM-export (xlsx/xls/csv, incl. legacy SpreadsheetML .xls)
- * 2) Classify each row into Screens / Shutters / Fusion / Luifels / Pergola /
- *    Outdoor / Home + bestaande klant vs. prospect
- * 3) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie de
- *    klanten zijn) — dat gaat dus nooit "gokken"
- * 4) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar de
- *    Worker (worker.js), die Claude vraagt om de kwalitatieve synthese
- * 5) Render het resultaat, met per thema/probleem/wens/drempel uitklapbaar
- *    wélke klanten erachter zitten
+ * 2) Stap 1 "Filteren": bouw twee filters op uit de data (Sales Rep = kolom
+ *    Q, Klant = kolom B) en laat de gebruiker optioneel één waarde per
+ *    filter kiezen. Een rij moet aan BEIDE voldoen (EN) om mee te tellen —
+ *    zie matchesFilters/getFilteredRows.
+ * 3) Stap 2 "Analyseren", enkel op de gefilterde rijen:
+ *    a) Classify each row into Screens / Shutters / Fusion / Luifels /
+ *       Pergola / Outdoor / Home + bestaande klant vs. prospect
+ *    b) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie
+ *       de klanten zijn) — dat gaat dus nooit "gokken"
+ *    c) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar
+ *       de Worker (worker.js), die Claude vraagt om de kwalitatieve synthese
+ * 4) Render het resultaat, met per thema/probleem/wens/drempel uitklapbaar
+ *    wélke klanten erachter zitten (en klikbaar door naar de brondata)
  *
  * Categorisering: de CRM-kolommen "Vertical shading" en "Luifels" geven een
  * hint (indien ingevuld), maar zijn in de praktijk vaak leeg. Daarom wordt
@@ -169,6 +174,12 @@ const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const fname = document.getElementById('fname');
+const filterBtn = document.getElementById('filterBtn');
+const filterCard = document.getElementById('filterCard');
+const filterRep = document.getElementById('filterRep');
+const filterKlant = document.getElementById('filterKlant');
+const filterKlantList = document.getElementById('filterKlantList');
+const filterStatus = document.getElementById('filterStatus');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const statusText = document.getElementById('statusText');
 
@@ -187,6 +198,12 @@ fileInput.addEventListener('change', (e) => {
 function handleFile(file) {
   fname.textContent = file.name;
   setStatus('Bestand inlezen...');
+  // Nieuw bestand: stap 1 (filter) moet opnieuw doorlopen worden voor er
+  // geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
+  // (klant/rep uit een vorig bestand) stilzwijgend blijft hangen.
+  filterCard.hidden = true;
+  filterBtn.disabled = true;
+  analyzeBtn.disabled = true;
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
@@ -194,14 +211,58 @@ function handleFile(file) {
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       parsedRows = normalizeRows(rows);
-      setStatus(`${parsedRows.length} rijen ingelezen uit "${wb.SheetNames[0]}". (Alle rijen tellen mee voor de cijfers; er is geen limiet in de tool zelf.)`);
-      analyzeBtn.disabled = parsedRows.length === 0;
+      setStatus(`${parsedRows.length} rijen ingelezen uit "${wb.SheetNames[0]}". Klik op "Filteren" om verder te gaan.`);
+      filterBtn.disabled = parsedRows.length === 0;
     } catch (err) {
       setStatus('Kon het bestand niet lezen: ' + err.message, true);
-      analyzeBtn.disabled = true;
+      filterBtn.disabled = true;
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// Stap 1 — Filteren: bouwt de twee filters op uit de ingelezen data (Sales
+// Rep = kolom Q, Klant = kolom B) en toont de filterkaart. De analyse zelf
+// (stap 2) gebeurt pas na een klik op "Analyseren", met de dan geldende
+// filterselectie.
+filterBtn.addEventListener('click', () => {
+  const reps = [...new Set(parsedRows.map((r) => r['rep']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const klanten = [...new Set(parsedRows.map((r) => r['name']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+  filterRep.innerHTML = '<option value="">Alle</option>' + reps.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
+  filterKlantList.innerHTML = klanten.map((k) => `<option value="${escapeAttr(k)}"></option>`).join('');
+  filterKlant.value = '';
+
+  filterCard.hidden = false;
+  updateFilterStatus();
+  setStatus(`${parsedRows.length} rijen ingelezen. Kies eventueel een filter en klik op "Analyseren".`);
+});
+
+filterRep.addEventListener('change', updateFilterStatus);
+filterKlant.addEventListener('input', updateFilterStatus);
+
+// Rij voldoet aan filter1 (Sales Rep) EN filter2 (Klant) — een leeg filter
+// ("Alle") legt geen voorwaarde op. Klant is een vrij tekstveld (met
+// datalist-suggesties) maar moet, om als filter te gelden, exact overeen-
+// komen met een klantnaam uit de data — anders levert dat gewoon 0 rijen
+// op, zichtbaar via de live teller hieronder.
+function matchesFilters(row) {
+  const repVal = filterRep.value;
+  const klantVal = filterKlant.value.trim();
+  if (repVal && row['rep'] !== repVal) return false;
+  if (klantVal && row['name'] !== klantVal) return false;
+  return true;
+}
+
+function getFilteredRows() {
+  return parsedRows.filter(matchesFilters);
+}
+
+function updateFilterStatus() {
+  const n = getFilteredRows().length;
+  filterStatus.textContent = `${n} van ${parsedRows.length} rapporten voldoen aan deze filters.`;
+  filterStatus.className = 'status' + (n === 0 ? ' err' : '');
+  analyzeBtn.disabled = n === 0;
 }
 
 function normalizeRows(rows) {
@@ -353,7 +414,8 @@ function remarksForAi(customers, targetCat) {
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
   analyzeBtn.disabled = true;
   setStatus('Data structureren...');
-  const agg = buildAggregation(parsedRows);
+  const filteredRows = getFilteredRows();
+  const agg = buildAggregation(filteredRows);
   lastAgg = agg;
   const cats = Object.keys(CATEGORY_LABELS);
   showProgress(0, cats.length);
@@ -403,10 +465,13 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
 
   renderResults(agg, aiCategories);
   hideProgress();
+  const filterNote = filteredRows.length === parsedRows.length
+    ? `${parsedRows.length} rijen`
+    : `${filteredRows.length} van ${parsedRows.length} rijen (filter: ${filterRep.value || 'alle reps'} / ${filterKlant.value || 'alle klanten'})`;
   if (failed.length) {
     setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen.`);
+    setStatus(`Analyse voltooid op basis van ${filterNote}.`);
   }
   analyzeBtn.disabled = false;
 });

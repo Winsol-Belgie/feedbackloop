@@ -36,8 +36,8 @@ button{font-family:inherit;}
 .progress-track{background:var(--line);border-radius:8px;height:8px;overflow:hidden;margin-top:12px;}
 .progress-fill{background:var(--accent);height:100%;width:0%;transition:width .25s ease;}
 #results{display:none;}
-.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;}
-.tab{background:var(--paper-2);border:1px solid var(--line);border-radius:11px;padding:10px 16px;font-weight:600;font-size:13px;cursor:pointer;color:var(--ink-soft);}
+.tabs{display:flex;gap:8px;margin-bottom:18px;}
+.tab{flex:1;text-align:center;background:var(--paper-2);border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-weight:600;font-size:13px;cursor:pointer;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .tab.active{background:var(--surface-dark);color:#fff;border-color:var(--surface-dark);}
 .section{display:none;}
 .section.active{display:block;}

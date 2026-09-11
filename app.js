@@ -95,6 +95,15 @@ function matchesKeyword(text, word) {
   return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'i').test(text);
 }
 
+// "SO" (zonder "!") is dubbelzinniger dan "SO!" — in hoofdletters (SO) is
+// het vrijwel altijd het merk en telt het direct mee voor Pergola; in
+// kleine letters ("so") is het een courant los woord, dus die telt enkel
+// mee als "pergola" ook ergens in dezelfde tekst voorkomt (ter bevestiging).
+function matchesBareSO(text) {
+  if (/(^|[^a-zA-Z0-9])SO($|[^a-zA-Z0-9])/.test(text)) return true;
+  return matchesKeyword(text, 'so') && matchesKeyword(text, 'pergola');
+}
+
 const POTENTIAL_MIDPOINTS = {
   '0-50k': 25000, '50-100k': 75000, '100-150k': 125000,
   '150-500k': 325000, '500k-1m': 750000,
@@ -199,6 +208,7 @@ function classifyCategories(row) {
   for (const cat of Object.keys(KEYWORDS)) {
     if (KEYWORDS[cat].some((w) => matchesKeyword(text, w))) cats.add(cat);
   }
+  if (matchesBareSO(text)) cats.add('pergola');
 
   return [...cats];
 }

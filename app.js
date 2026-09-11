@@ -158,6 +158,10 @@ const POTENTIAL_MIDPOINTS = {
 const MAX_REMARKS_TO_AI = 60;
 
 let parsedRows = [];
+// Laatst opgebouwde aggregatie (met volledige rij-detail per klant) —
+// bewaard zodat de klik-op-klantnaam-popup (openCustomerModal) er nadien
+// nog bij kan, buiten de scope van de analyze-click-handler.
+let lastAgg = null;
 
 // URL van de losstaande Cloudflare Worker (zie worker.js).
 const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
@@ -272,11 +276,22 @@ function buildAggregation(rows) {
     const existing = isExisting(row);
     const name = row['name'] || '(naam onbekend)';
     const remark = [row['remark'], row['re']].filter(Boolean).join(' — ');
+    // Bewaar genoeg van de brondata om nadien (bij het aanklikken van een
+    // klantnaam) de originele rij te kunnen tonen — zie openCustomerModal.
+    // "Rep" is de vertegenwoordiger; "User" als terugval indien leeg.
+    const detail = {
+      name,
+      remark,
+      rep: row['rep'] || row['user'] || '',
+      date: row['date'] || '',
+      type: row['type'] || '',
+      status: row['status'] || '',
+    };
     for (const cat of rowCats) {
       if (existing) {
-        agg[cat].existing.customers.push({ name, remark });
+        agg[cat].existing.customers.push(detail);
       } else {
-        agg[cat].prospecting.customers.push({ name, remark });
+        agg[cat].prospecting.customers.push(detail);
         agg[cat].prospecting.potentialSum += potentialForCategory(row, cat);
       }
     }
@@ -339,6 +354,7 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   analyzeBtn.disabled = true;
   setStatus('Data structureren...');
   const agg = buildAggregation(parsedRows);
+  lastAgg = agg;
   const cats = Object.keys(CATEGORY_LABELS);
   showProgress(0, cats.length);
 
@@ -441,13 +457,13 @@ function renderResults(agg, aiCategories) {
         <div class="stat-row">
           <div class="stat"><b>${stats.existing.customers.length}</b><span>bestaande klanten met input</span></div>
         </div>
-        ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten')}
+        ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten', cat, 'existing')}
         <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
-        ${renderThemes(existingAi.themes)}
+        ${renderThemes(existingAi.themes, cat, 'existing')}
         <h2 class="part-title" style="margin-top:18px;">Technische meldingen</h2>
-        ${renderIssueGroups(existingAi.technical_issues, 'issue', 'probleem')}
+        ${renderIssueGroups(existingAi.technical_issues, 'issue', 'probleem', cat, 'existing')}
         <h2 class="part-title" style="margin-top:18px;">Gewenste features</h2>
-        ${renderIssueGroups(existingAi.feature_requests, 'request', 'wens')}
+        ${renderIssueGroups(existingAi.feature_requests, 'request', 'wens', cat, 'existing')}
         <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
         <p class="narrative">${escapeHtml(existingAi.benchmark_product || '—')}</p>
         <h2 class="part-title" style="margin-top:18px;">Benchmark prijs</h2>
@@ -460,10 +476,10 @@ function renderResults(agg, aiCategories) {
           <div class="stat"><b>${stats.prospecting.customers.length}</b><span>prospects</span></div>
           <div class="stat"><b>&euro;${Math.round(stats.prospecting.potentialSum).toLocaleString('nl-BE')}</b><span>totaal potentieel (schatting)</span></div>
         </div>
-        ${renderCustomerList(stats.prospecting.customers, 'Bekijk welke prospects')}
+        ${renderCustomerList(stats.prospecting.customers, 'Bekijk welke prospects', cat, 'prospecting')}
         <p class="narrative">${escapeHtml(prospAi.potential_summary || 'Geen data beschikbaar.')}</p>
         <h2 class="part-title" style="margin-top:18px;">Drempels om over te stappen</h2>
-        ${renderThemes(prospAi.barriers)}
+        ${renderThemes(prospAi.barriers, cat, 'prospecting')}
       </div>
     `;
     sectionsEl.appendChild(section);
@@ -472,17 +488,35 @@ function renderResults(agg, aiCategories) {
   document.getElementById('results').style.display = 'block';
 }
 
-function renderCustomerList(customers, label) {
+// escapeHtml (hieronder) gaat via div.textContent/innerHTML — dat escaped
+// &, < en > correct voor tekstinhoud, maar NIET aanhalingstekens (die zijn
+// enkel relevant binnen een HTML-attribuut, niet in tekstinhoud). Voor de
+// data-* attributen hieronder (klantnaam kan een " of ' bevatten) is dat
+// wél nodig, anders breekt het attribuut. Vandaar een aparte helper.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// Eén klikbare klantnaam — opent de brondata-popup (openCustomerModal) via
+// het gedelegeerde click-event hieronder. data-cat/data-part/data-name
+// zijn de sleutel om in lastAgg de bijbehorende rij(en) terug te vinden.
+function customerLinkHtml(name, cat, part) {
+  return `<button type="button" class="customer-link" data-cat="${escapeAttr(cat)}" data-part="${escapeAttr(part)}" data-name="${escapeAttr(name)}">${escapeHtml(name)}</button>`;
+}
+
+function renderCustomerList(customers, label, cat, part) {
   if (!customers.length) return '';
-  const items = customers.map((c) => `<li><strong>${escapeHtml(c.name)}</strong>${c.remark ? ' — ' + escapeHtml(truncate(c.remark, 90)) : ''}</li>`).join('');
+  const items = customers.map((c) => `<li>${customerLinkHtml(c.name, cat, part)}${c.remark ? ' — ' + escapeHtml(truncate(c.remark, 90)) : ''}</li>`).join('');
   return `<details class="customers-list"><summary>${label} (${customers.length})</summary><ul class="customer-names">${items}</ul></details>`;
 }
 
 // Eén uitklapbaar blokje (thema/probleem/wens/drempel) met de klantnamen
-// erachter en een badge (sentiment-pill of vast label) rechts.
-function renderDetailsBlock(label, names, badgeHtml) {
+// erachter en een badge (sentiment-pill of vast label) rechts. Elke
+// klantnaam is klikbaar (zie customerLinkHtml) zodat je de brondata kan
+// controleren waarop de analyse gebaseerd is.
+function renderDetailsBlock(label, names, badgeHtml, cat, part) {
   const inner = names.length
-    ? `<div class="customer-list">${names.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`
+    ? `<div class="customer-list">${names.map((n) => `<div>${customerLinkHtml(n, cat, part)}</div>`).join('')}</div>`
     : '';
   return `
     <details class="theme-details">
@@ -495,23 +529,23 @@ function renderDetailsBlock(label, names, badgeHtml) {
   `;
 }
 
-function renderThemes(themes) {
+function renderThemes(themes, cat, part) {
   if (!themes || !themes.length) return '<p class="narrative">—</p>';
   return themes.map((t) => {
     const names = t.customers || [];
     const sentiment = t.sentiment || 'neutral';
-    return renderDetailsBlock(t.label, names, `<span class="pill ${sentiment}">${sentiment}</span>`);
+    return renderDetailsBlock(t.label, names, `<span class="pill ${sentiment}">${sentiment}</span>`, cat, part);
   }).join('');
 }
 
 // Technische meldingen / gewenste features: zelfde uitklap-opmaak als
 // renderThemes, maar met een vast badge-label i.p.v. sentiment (positief/
 // negatief zegt hier niets — het gaat om "is dit gemeld", niet om toon).
-function renderIssueGroups(items, badgeClass, badgeText) {
+function renderIssueGroups(items, badgeClass, badgeText, cat, part) {
   if (!items || !items.length) return '<p class="narrative">Geen gemeld.</p>';
   return items.map((t) => {
     const names = t.customers || [];
-    return renderDetailsBlock(t.label, names, `<span class="pill ${badgeClass}">${badgeText}</span>`);
+    return renderDetailsBlock(t.label, names, `<span class="pill ${badgeClass}">${badgeText}</span>`, cat, part);
   }).join('');
 }
 
@@ -523,4 +557,55 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = String(str ?? '');
   return div.innerHTML;
+}
+
+/* --- Klantnaam-popup: toont de originele CRM-rij(en) waarop een thema/
+ * probleem/wens/drempel gebaseerd is, zodat je kan nagaan of de
+ * categorie-classificatie/filtering klopt. Eén klantnaam kan met meerdere
+ * rijen (bezoekrapporten) overeenkomen binnen dezelfde categorie/deel — die
+ * worden dan allemaal getoond. */
+const customerModal = document.getElementById('customerModal');
+const modalBody = document.getElementById('modalBody');
+
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.customer-link');
+  if (link) {
+    openCustomerModal(link.dataset.cat, link.dataset.part, link.dataset.name);
+    return;
+  }
+  if (e.target.closest('#modalClose') || e.target === customerModal) {
+    closeCustomerModal();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !customerModal.hidden) closeCustomerModal();
+});
+
+function openCustomerModal(cat, part, name) {
+  const bucket = lastAgg && lastAgg[cat] && lastAgg[cat][part];
+  const entries = bucket ? bucket.customers.filter((c) => c.name === name) : [];
+
+  const visits = entries.length
+    ? entries.map((v) => `
+        <div class="modal-visit">
+          <div class="modal-field"><b>Vertegenwoordiger</b><span>${escapeHtml(v.rep || '—')}</span></div>
+          <div class="modal-field"><b>Datum bezoek</b><span>${escapeHtml(v.date || '—')}</span></div>
+          <div class="modal-field"><b>Type bezoek</b><span>${escapeHtml(v.type || '—')}</span></div>
+          <div class="modal-field"><b>Status</b><span>${escapeHtml(v.status || '—')}</span></div>
+          <div class="modal-field modal-field-full"><b>Inhoud van het bezoek</b><p class="narrative">${escapeHtml(v.remark || '—')}</p></div>
+        </div>
+      `).join('')
+    : '<p class="narrative">Geen brondata gevonden voor deze klant in deze categorie/dit deel.</p>';
+
+  modalBody.innerHTML = `
+    <h3 class="modal-title">${escapeHtml(name)}</h3>
+    <p class="part-sub">${CATEGORY_LABELS[cat] || cat} · ${part === 'prospecting' ? 'Prospecting' : 'Bestaande klant'} · ${entries.length} bezoekrapport${entries.length === 1 ? '' : 'en'}</p>
+    ${visits}
+  `;
+  customerModal.hidden = false;
+}
+
+function closeCustomerModal() {
+  customerModal.hidden = true;
+  modalBody.innerHTML = '';
 }

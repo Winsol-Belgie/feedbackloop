@@ -1,8 +1,8 @@
 # Winsol Feedbackloop
 
 Online tool: upload de periodieke CRM-export (Excel) van bezoekrapporten en
-krijg een AI-analyse per productcategorie (Outdoor, Home, Screens, Rolluiken,
-Luifels), opgedeeld in **bestaande klanten** en **prospecting** — zoals
+krijg een AI-analyse per productcategorie (Screens, Shutters, Awnings,
+Pergola), opgedeeld in **bestaande klanten** en **prospecting** — zoals
 beschreven in `Feedbackloop.docx`.
 
 ## Architectuur

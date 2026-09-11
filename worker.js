@@ -1,14 +1,15 @@
 // Cloudflare Worker — losstaande API voor de feedbackloop-tool.
 // De frontend (index.html/app.js) draait op GitHub Pages; deze Worker is
-// enkel het /analyze-endpoint dat cross-origin wordt aangeroepen (CORS
+// enkel het analyse-endpoint dat cross-origin wordt aangeroepen (CORS
 // hieronder). De Anthropic API-sleutel staat alleen hier (wrangler secret),
 // nooit in de frontend-code.
+//
+// Claude krijgt per klant-opmerking ook de klantnaam mee, en moet in zijn
+// thema's/drempels exact diezelfde namen citeren (i.p.v. enkel een cijfer
+// op te geven) — zo blijft "hoeveel klanten" herleidbaar tot wélke klanten,
+// in plaats van een verzonnen telling.
 
-const CATEGORY_KEYS = ['screens', 'shutters', 'awnings', 'pergola'];
-
-// Zet hier je GitHub Pages origin (bv. "https://winsol-belgie.github.io")
-// in plaats van "*" zodra de Pages-URL definitief is, voor een striktere CORS.
-const ALLOWED_ORIGIN = '*';
+const CATEGORY_KEYS = ['outdoor', 'home', 'screens', 'rolluiken', 'luifels'];
 
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
@@ -28,10 +29,14 @@ const ANALYSIS_TOOL = {
                 type: 'object',
                 properties: {
                   label: { type: 'string' },
-                  count: { type: 'integer', description: 'How many remarks reflect this viewpoint.' },
                   sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral'] },
+                  customers: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Exact customer names (copied verbatim from the provided remarks) whose remark reflects this viewpoint.',
+                  },
                 },
-                required: ['label', 'count', 'sentiment'],
+                required: ['label', 'sentiment', 'customers'],
               },
             },
             benchmark_product: { type: 'string', description: 'What customers say about specs/offering vs competitors.' },
@@ -49,9 +54,13 @@ const ANALYSIS_TOOL = {
                 type: 'object',
                 properties: {
                   label: { type: 'string' },
-                  count: { type: 'integer' },
+                  customers: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Exact customer names (copied verbatim) whose remark reflects this barrier.',
+                  },
                 },
-                required: ['label', 'count'],
+                required: ['label', 'customers'],
               },
             },
           },
@@ -63,6 +72,8 @@ const ANALYSIS_TOOL = {
     required: CATEGORY_KEYS,
   },
 };
+
+const ALLOWED_ORIGIN = '*';
 
 export default {
   async fetch(request, env) {
@@ -98,7 +109,7 @@ export default {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          max_tokens: 8192,
           tools: [ANALYSIS_TOOL],
           tool_choice: { type: 'tool', name: 'submit_analysis' },
           messages: [{ role: 'user', content: prompt }],
@@ -123,22 +134,27 @@ export default {
 };
 
 function buildPrompt(aggregation) {
-  const parts = ['Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering: screens, rolluiken, luifels, pergolas).',
-    'Voor elke productcategorie krijg je: het aantal bestaande klanten met input, hun losse opmerkingen (remarks), het aantal prospects, het geschatte potentieel in euro, en hun opmerkingen.',
-    'Geef per categorie een genuanceerde, feitelijke synthese in het Nederlands. Verzin geen cijfers die niet uit de remarks af te leiden zijn — "count" bij een thema/drempel is het aantal remarks dat dat standpunt weerspiegelt.',
+  const parts = ['Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering: outdoor, home, screens, rolluiken, luifels).',
+    'Voor elke productcategorie krijg je: de opmerkingen van bestaande klanten (met klantnaam), en de opmerkingen van prospects (met klantnaam) plus hun geschat potentieel in euro.',
+    'Geef per categorie een genuanceerde, feitelijke synthese in het Nederlands.',
+    'BELANGRIJK: bij elk thema/elke drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema zonder dat er minstens één klant met naam achter zit.',
     'Als er voor een categorie geen of nauwelijks remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
     '', '--- DATA ---'];
 
   for (const cat of CATEGORY_KEYS) {
-    const c = aggregation[cat] || { existing: { n: 0, remarks: [] }, prospecting: { n: 0, potentialSum: 0, remarks: [] } };
+    const c = aggregation[cat] || { existing: { remarks: [] }, prospecting: { remarks: [], potentialSum: 0 } };
     parts.push(`\n## Categorie: ${cat}`);
-    parts.push(`Bestaande klanten: ${c.existing.n} rapporten.`);
-    parts.push('Remarks bestaande klanten:\n' + (c.existing.remarks.length ? c.existing.remarks.map((r) => '- ' + r).join('\n') : '(geen)'));
-    parts.push(`Prospects: ${c.prospecting.n} rapporten, geschat potentieel €${Math.round(c.prospecting.potentialSum)}.`);
-    parts.push('Remarks prospects:\n' + (c.prospecting.remarks.length ? c.prospecting.remarks.map((r) => '- ' + r).join('\n') : '(geen)'));
+    parts.push('Opmerkingen bestaande klanten:\n' + formatRemarks(c.existing.remarks));
+    parts.push(`Prospects — geschat totaal potentieel €${Math.round(c.prospecting.potentialSum || 0)}.`);
+    parts.push('Opmerkingen prospects:\n' + formatRemarks(c.prospecting.remarks));
   }
 
   return parts.join('\n');
+}
+
+function formatRemarks(remarks) {
+  if (!remarks || !remarks.length) return '(geen)';
+  return remarks.map((r) => `- [${r.name}] ${r.remark}`).join('\n');
 }
 
 function corsHeaders() {

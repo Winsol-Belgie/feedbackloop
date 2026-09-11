@@ -21,27 +21,31 @@ API als Worker op Cloudflare.**
   secret), nooit in de frontend-code. De frontend roept deze Worker
   cross-origin aan (CORS zit al in `worker.js`).
 
-## Belangrijke aanname — categorie-mapping
+## Categorieën
 
-De CRM-export heeft kolommen `Outdoor / Home / Vertical shading / Luifels`,
-maar het gewenste rapport is ingedeeld in `Screens / Shutters / Awnings /
-Pergola`. Die twee komen niet exact overeen (er is bv. geen aparte
-"Shutters"-kolom). De huidige, aanpasbare inschatting staat bovenaan
-`app.js` (`COLUMN_CATEGORY_MAP` / `KEYWORD_CATEGORY_MAP`):
-
-- Vertical shading → Screens
-- Luifels → Awnings
-- Outdoor → Pergola
-- Home → (niet gemapt)
-- "Shutters" wordt enkel gevuld via trefwoorden in de opmerkingen
-  (rolluik/shutter/volet), want er is geen brondata-kolom voor.
-
-**Controleer deze mapping** en pas ze aan in `app.js` indien nodig — dat is
-een aanpassing van enkele minuten.
+De 5 tabbladen volgen rechtstreeks de kolommen uit de CRM-export: Outdoor,
+Home, Luifels, en Vertical shading — dat laatste wordt gesplitst in
+**Screens** en **Rolluiken**, want daar is geen aparte brondata-kolom voor.
+Die split gebeurt via trefwoorden in de opmerkingen (`ROLLUIKEN_KEYWORDS`
+bovenaan `app.js`: rolluik/shutter/volet) — geen match betekent Screens
+(de meest voorkomende van de twee). Pas die keywordlijst aan indien nodig.
 
 Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =
 prospect), met de kolom `Reason` als fallback.
+
+Elk cijfer in de tool (aantallen, potentieel, en de teller naast elk thema)
+is uitklapbaar tot de onderliggende klantnamen — er wordt dus nergens een
+aantal getoond zonder dat je kan zien over wie het gaat. Claude krijgt de
+klantnaam mee bij elke opmerking en moet in zijn thema's/drempels exact die
+namen citeren, in plaats van enkel een los cijfer te verzinnen.
+
+Er zit geen limiet op het aantal rijen dat de tool inleest/telt — als je
+Excel 500 (of 5000) rijen heeft, tellen ze allemaal mee voor de cijfers. Wel
+wordt het aantal *opmerkingen dat naar de AI gestuurd wordt* per
+categorie/deel begrensd op `MAX_REMARKS_TO_AI` (standaard 300) om de
+promptgrootte/kost te beperken — in de praktijk raak je dat bij een normale
+periodieke export niet snel aan.
 
 ## Opzetten (eenmalig)
 

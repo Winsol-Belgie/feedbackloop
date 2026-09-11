@@ -1,54 +1,55 @@
 /* Winsol Feedbackloop — client-side logic
  * 1) Parse uploaded CRM-export (xlsx/xls/csv, incl. legacy SpreadsheetML .xls)
- * 2) Classify each row into a product category + existing-customer vs prospect
- * 3) Compute exact counts/sums locally (never left to the AI to "guess")
- * 4) Send only the aggregated stats + free-text remarks to /analyze (Cloudflare
- *    Pages Function) which calls Claude for the qualitative synthesis
- * 5) Render the result per the design system tokens in index.html
+ * 2) Classify each row into a product categorie (rechtstreeks op basis van de
+ *    Excel-kolommen zelf, geen giswerk) + bestaande klant vs. prospect
+ * 3) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie de
+ *    klanten zijn) — dat gaat dus nooit "gokken"
+ * 4) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar de
+ *    Worker (worker.js), die Claude vraagt om de kwalitatieve synthese
+ * 5) Render het resultaat, met per thema/drempel uitklapbaar wélke klanten
+ *    erachter zitten
  *
- * LET OP — categorie-mapping (pas hier aan indien nodig):
- * De CRM-export heeft kolommen Outdoor / Home / Vertical shading / Luifels,
- * maar de gewenste rapport-indeling is Screens / Shutters / Awnings / Pergola.
- * Die twee sets komen niet 1-op-1 overeen (er is bv. geen "Shutters"-kolom).
- * Onderstaande mapping is een eerste, aanpasbare inschatting:
- *   - "Vertical shading" kolom  -> screens
- *   - "Luifels" kolom           -> awnings
- *   - "Outdoor" kolom           -> pergola
- *   - "Home" kolom              -> (niet gemapt op de 4 categorieën)
- * Aangevuld met een keyword-fallback op de vrije tekst (Remark/Re), o.a. om
- * "shutters" te vullen, aangezien daar geen aparte kolom voor bestaat.
+ * Categorieën = rechtstreeks de kolommen uit de CRM-export (Outdoor / Home /
+ * Vertical shading / Luifels), met één uitzondering op vraag van Gwenn:
+ * "Vertical shading" wordt gesplitst in Screens en Rolluiken. Er is geen
+ * aparte kolom voor die twee, dus dat gebeurt via trefwoorden in de
+ * opmerkingen (ROLLUIKEN_KEYWORDS hieronder) — geen match = Screens
+ * (de meest voorkomende van de twee).
  */
 
 const CATEGORY_LABELS = {
+  outdoor: 'Outdoor',
+  home: 'Home',
   screens: 'Screens',
-  shutters: 'Rolluiken (Shutters)',
-  awnings: 'Luifels (Awnings)',
-  pergola: "Pergola's",
+  rolluiken: 'Rolluiken',
+  luifels: 'Luifels',
 };
 
-const COLUMN_CATEGORY_MAP = {
-  'outdoor': 'pergola',
-  'vertical shading': 'screens',
-  'luifels': 'awnings',
-};
+const ROLLUIKEN_KEYWORDS = ['rolluik', 'shutter', 'volet'];
 
-const KEYWORD_CATEGORY_MAP = [
-  { cat: 'screens', words: ['screen', 'zonnescherm', 'doek'] },
-  { cat: 'shutters', words: ['rolluik', 'shutter', 'volet'] },
-  { cat: 'awnings', words: ['luifel', 'markies', 'awning'] },
-  { cat: 'pergola', words: ['pergola'] },
-];
+// Bron-kolom om het potentieel (€) van een categorie uit te lezen.
+const POTENTIAL_COLUMN = {
+  outdoor: 'outdoor',
+  home: 'home',
+  screens: 'vertical shading',
+  rolluiken: 'vertical shading',
+  luifels: 'luifels',
+};
 
 const POTENTIAL_MIDPOINTS = {
   '0-50k': 25000, '50-100k': 75000, '100-150k': 125000,
   '150-500k': 325000, '500k-1m': 750000,
 };
 
-// URL van de losstaande Cloudflare Worker (zie worker.js). Vul in na
-// je eerste `npx wrangler deploy` — die toont de *.workers.dev-URL.
-const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
+// Max. aantal opmerkingen per categorie/deel dat naar de AI gaat voor de
+// kwalitatieve synthese (kost/prompt-grootte begrenzen). Telt niet mee voor
+// de harde cijfers (aantallen, potentieel) — die gebruiken altijd alle rijen.
+const MAX_REMARKS_TO_AI = 300;
 
 let parsedRows = [];
+
+// URL van de losstaande Cloudflare Worker (zie worker.js).
+const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
 
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -78,7 +79,7 @@ function handleFile(file) {
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       parsedRows = normalizeRows(rows);
-      setStatus(`${parsedRows.length} rijen ingelezen uit "${wb.SheetNames[0]}".`);
+      setStatus(`${parsedRows.length} rijen ingelezen uit "${wb.SheetNames[0]}". (Alle rijen tellen mee voor de cijfers; er is geen limiet in de tool zelf.)`);
       analyzeBtn.disabled = parsedRows.length === 0;
     } catch (err) {
       setStatus('Kon het bestand niet lezen: ' + err.message, true);
@@ -108,15 +109,15 @@ function parsePotential(str) {
 }
 
 function classifyCategories(row) {
-  const cats = new Set();
-  for (const col in COLUMN_CATEGORY_MAP) {
-    if (row[col] && row[col].trim() !== '') cats.add(COLUMN_CATEGORY_MAP[col]);
+  const cats = [];
+  if (row['outdoor']) cats.push('outdoor');
+  if (row['home']) cats.push('home');
+  if (row['luifels']) cats.push('luifels');
+  if (row['vertical shading']) {
+    const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
+    cats.push(ROLLUIKEN_KEYWORDS.some((w) => text.includes(w)) ? 'rolluiken' : 'screens');
   }
-  const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
-  for (const { cat, words } of KEYWORD_CATEGORY_MAP) {
-    if (words.some((w) => text.includes(w))) cats.add(cat);
-  }
-  return cats.size ? [...cats] : ['unclassified'];
+  return cats;
 }
 
 function isExisting(row) {
@@ -129,36 +130,36 @@ function isExisting(row) {
 }
 
 function buildAggregation(rows) {
-  const cats = ['screens', 'shutters', 'awnings', 'pergola'];
+  const cats = Object.keys(CATEGORY_LABELS);
   const agg = {};
   for (const cat of cats) {
     agg[cat] = {
-      existing: { n: 0, remarks: [] },
-      prospecting: { n: 0, potentialSum: 0, remarks: [] },
+      existing: { customers: [] },
+      prospecting: { customers: [], potentialSum: 0 },
     };
   }
   for (const row of rows) {
-    const rowCats = classifyCategories(row).filter((c) => cats.includes(c));
+    const rowCats = classifyCategories(row);
     const existing = isExisting(row);
-    const remarkText = [row['remark'], row['re']].filter(Boolean).join(' — ');
+    const name = row['name'] || '(naam onbekend)';
+    const remark = [row['remark'], row['re']].filter(Boolean).join(' — ');
     for (const cat of rowCats) {
       if (existing) {
-        agg[cat].existing.n++;
-        if (remarkText) agg[cat].existing.remarks.push(remarkText);
+        agg[cat].existing.customers.push({ name, remark });
       } else {
-        agg[cat].prospecting.n++;
-        const potStr = row[Object.keys(COLUMN_CATEGORY_MAP).find((k) => COLUMN_CATEGORY_MAP[k] === cat)] || row['potential'];
+        const potStr = row[POTENTIAL_COLUMN[cat]] || row['potential'];
+        agg[cat].prospecting.customers.push({ name, remark });
         agg[cat].prospecting.potentialSum += parsePotential(potStr);
-        if (remarkText) agg[cat].prospecting.remarks.push(remarkText);
       }
     }
   }
-  // cap remarks sent to the AI to keep the prompt manageable
-  for (const cat of cats) {
-    agg[cat].existing.remarks = agg[cat].existing.remarks.slice(0, 150);
-    agg[cat].prospecting.remarks = agg[cat].prospecting.remarks.slice(0, 150);
-  }
   return agg;
+}
+
+// Beperkte remarks-lijst (met klantnaam) om naar de AI te sturen — enkel
+// klanten die ook effectief iets geschreven hebben.
+function remarksForAi(customers) {
+  return customers.filter((c) => c.remark).slice(0, MAX_REMARKS_TO_AI);
 }
 
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
@@ -170,7 +171,12 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
     const res = await fetch(ANALYZE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ aggregation: agg }),
+      body: JSON.stringify({
+        aggregation: Object.fromEntries(Object.entries(agg).map(([cat, v]) => [cat, {
+          existing: { remarks: remarksForAi(v.existing.customers) },
+          prospecting: { remarks: remarksForAi(v.prospecting.customers), potentialSum: v.prospecting.potentialSum },
+        }])),
+      }),
     });
     if (!res.ok) throw new Error(`Server antwoordde met status ${res.status}`);
     const data = await res.json();
@@ -213,10 +219,11 @@ function renderResults(agg, aiCategories) {
     section.innerHTML = `
       <div class="card">
         <h2 class="part-title">Deel 1 — Bestaande klanten</h2>
-        <p class="part-sub">${CATEGORY_LABELS[cat]} · gebaseerd op ${stats.existing.n} rapporten</p>
+        <p class="part-sub">${CATEGORY_LABELS[cat]} · gebaseerd op ${stats.existing.customers.length} rapporten</p>
         <div class="stat-row">
-          <div class="stat"><b>${stats.existing.n}</b><span>bestaande klanten met input</span></div>
+          <div class="stat"><b>${stats.existing.customers.length}</b><span>bestaande klanten met input</span></div>
         </div>
+        ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten')}
         <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
         ${renderThemes(existingAi.themes)}
         <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
@@ -226,11 +233,12 @@ function renderResults(agg, aiCategories) {
       </div>
       <div class="card">
         <h2 class="part-title">Deel 2 — Prospecting</h2>
-        <p class="part-sub">${CATEGORY_LABELS[cat]} · gebaseerd op ${stats.prospecting.n} rapporten</p>
+        <p class="part-sub">${CATEGORY_LABELS[cat]} · gebaseerd op ${stats.prospecting.customers.length} rapporten</p>
         <div class="stat-row">
-          <div class="stat"><b>${stats.prospecting.n}</b><span>prospects</span></div>
+          <div class="stat"><b>${stats.prospecting.customers.length}</b><span>prospects</span></div>
           <div class="stat"><b>&euro;${Math.round(stats.prospecting.potentialSum).toLocaleString('nl-BE')}</b><span>totaal potentieel (schatting)</span></div>
         </div>
+        ${renderCustomerList(stats.prospecting.customers, 'Bekijk welke prospects')}
         <p class="narrative">${escapeHtml(prospAi.potential_summary || 'Geen data beschikbaar.')}</p>
         <h2 class="part-title" style="margin-top:18px;">Drempels om over te stappen</h2>
         ${renderThemes(prospAi.barriers)}
@@ -242,14 +250,35 @@ function renderResults(agg, aiCategories) {
   document.getElementById('results').style.display = 'block';
 }
 
+function renderCustomerList(customers, label) {
+  if (!customers.length) return '';
+  const items = customers.map((c) => `<li><strong>${escapeHtml(c.name)}</strong>${c.remark ? ' — ' + escapeHtml(truncate(c.remark, 90)) : ''}</li>`).join('');
+  return `<details class="customers-list"><summary>${label} (${customers.length})</summary><ul class="customer-names">${items}</ul></details>`;
+}
+
 function renderThemes(themes) {
   if (!themes || !themes.length) return '<p class="narrative">—</p>';
-  return themes.map((t) => `
-    <div class="theme">
-      <span>${escapeHtml(t.label || t.theme || t.barrier || '')}</span>
-      <span><span class="pill ${t.sentiment || 'neutral'}">${t.sentiment || ''}</span> <span class="count-badge">${t.count ?? ''}</span></span>
-    </div>
-  `).join('');
+  return themes.map((t) => {
+    const names = t.customers || [];
+    const label = t.label || '';
+    const sentiment = t.sentiment || 'neutral';
+    const inner = names.length
+      ? `<div class="customer-list">${names.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`
+      : '';
+    return `
+      <details class="theme-details">
+        <summary>
+          <span>${escapeHtml(label)}</span>
+          <span><span class="pill ${sentiment}">${sentiment}</span> <span class="count-badge">${names.length}</span></span>
+        </summary>
+        ${inner}
+      </details>
+    `;
+  }).join('');
+}
+
+function truncate(str, n) {
+  return str.length > n ? str.slice(0, n) + '…' : str;
 }
 
 function escapeHtml(str) {

@@ -4,10 +4,10 @@
 // Anthropic API-sleutel staat alleen hier (wrangler secret), nooit in de
 // frontend-code.
 //
-// Verwerkt ÉÉN categorie per aanroep (de frontend doet 5 parallelle
+// Verwerkt ÉÉN categorie per aanroep (de frontend doet 7 parallelle
 // aanroepen, één per categorie) — dat houdt elke prompt klein/snel, geeft
 // de frontend een natuurlijk voortgangspunt (x van y klaar), en was ook de
-// fix voor de 502 die optrad toen alle 5 categorieën in één grote aanroep
+// fix voor de 502 die optrad toen alle categorieën in één grote aanroep
 // zaten.
 //
 // Claude krijgt per klant-opmerking ook de klantnaam mee, en moet in zijn

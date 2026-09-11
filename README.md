@@ -20,36 +20,38 @@ API als Worker op Cloudflare.**
   om daar een inhoudelijke synthese van te maken (thema's, sentiment,
   drempels). De Anthropic API-sleutel staat **alleen** hier (Worker
   secret), nooit in de frontend-code. De frontend roept deze Worker
-  cross-origin aan (CORS zit al in `worker.js`) — **5 keer parallel, één
+  cross-origin aan (CORS zit al in `worker.js`) — **7 keer parallel, één
   aanroep per categorie.** Dat houdt elke prompt klein/snel (voorkomt de
   502 die optrad bij één grote aanroep voor alle categorieën samen) én
-  geeft een echt voortgangspunt in de UI ("x/5 categorieën verwerkt"),
+  geeft een echt voortgangspunt in de UI ("x/7 categorieën verwerkt"),
   zonder extra vertraging.
 
 ## Categorieën
 
-De 5 tabbladen zijn Screens, Shutters (Rolluiken), Awnings (Luifels),
-Pergola's en Home (Schrijnwerk, incl. Iqon).
+7 tabbladen: Screens, Rolluiken, Fusion, Luifels, Pergola, Outdoor, Home.
+Dit volgt rechtstreeks `CATEGORIE_TREFWOORDEN.xlsx` (in de werkmap naast
+deze repo, niet in git) — Gwenn's eigen lijst van merk-/productnamen per
+categorie. Dat bestand is de plek om dit verder uit te breiden: nieuwe rij
+toevoegen en laten weten welke, dan neem ik ze over in `KEYWORDS` bovenaan
+`app.js`.
 
 De brondata-kolommen die je zou verwachten (in oudere exports "Vertical
 shading"/"Luifels"/"Home", in recentere exports "Windows"/"Outdoor"/
 "Shutter"/"Screens"/"Garage"/"Awnings") staan in de praktijk zo goed als
 altijd leeg (in een test-export: 0 van de 500 rijen). De classificatie
 gebeurt daarom hoofdzakelijk via trefwoorden in de vrije tekst (kolom
-`Remark`, plus `Re`/`Reason`) — `KEYWORDS` bovenaan `app.js`, inclusief
-Winsol-productnamen die effectief in de opmerkingen voorkomen (Fusion, Zip,
-SO, Verandasol, Lumi, Linasolar, Iqon, ...). De kolommen worden wel nog
-gebruikt als hint zodra ze toevallig gevuld zijn (`COLUMN_HINTS`).
+`Remark`, plus `Re`/`Reason`). De kolommen worden wel nog gebruikt als hint
+zodra ze toevallig gevuld zijn (`COLUMN_HINTS`).
 
-Bewust NIET als trefwoord opgenomen: "zonwering" en "outdoor" (te algemeen,
-dekken meerdere categorieën tegelijk) en "Origin" (komt zowel voor bij ramen
-als bij pergola in de opmerkingen — niet eenduidig genoeg om automatisch
-toe te wijzen). Rijen die geen enkel trefwoord bevatten (vaak zuiver
-administratieve opmerkingen, bv. "niemand aanwezig") tellen bewust nergens
-mee — dat is juist gedrag, geen bug.
+Rijen die geen enkel trefwoord bevatten (vaak zuiver administratieve
+opmerkingen, bv. "niemand aanwezig") tellen bewust nergens mee — dat is
+juist gedrag, geen bug.
 
-Pas de trefwoordenlijsten gerust aan/vul aan — jij kent de productnamen en
-courante schrijfwijzes beter dan ik kon afleiden uit de data.
+**Twee dingen om na te kijken** (zie ook het antwoord in de chat):
+- "SO" komt in de opmerkingen soms zonder uitroepteken voor (`SO` i.p.v.
+  `SO!`) — nu niet meegenomen, enkel de officiële schrijfwijze `SO!`.
+- "Origin" staat in het trefwoordenbestand enkel bij Pergola, maar duikt in
+  de opmerkingen ook op in een ramen/schrijnwerk-context.
 
 Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =

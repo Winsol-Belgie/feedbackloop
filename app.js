@@ -19,26 +19,48 @@
 
 const CATEGORY_LABELS = {
   screens: 'Screens',
-  shutters: 'Shutters (Rolluiken)',
-  awnings: 'Awnings (Luifels)',
-  pergola: "Pergola's",
-  home: 'Home (Schrijnwerk)',
+  shutters: 'Rolluiken',
+  fusion: 'Fusion',
+  awnings: 'Luifels',
+  pergola: "Pergola",
+  outdoor: 'Outdoor',
+  home: 'Home',
 };
 
-// Trefwoorden zijn afgeleid uit écht voorkomende tekst in de Remarks
-// (inclusief Winsol-productnamen zoals Fusion/Zip/SO/Verandasol/Iqon) — de
-// brondata-kolommen (Windows/Outdoor/Shutter/Screens/Garage/Awnings) staan
-// in de praktijk vrijwel altijd leeg, dus dit is de hoofdbron, niet enkel
-// een fallback. "zonwering" en "outdoor" zijn bewust NIET toegevoegd: die
-// woorden dekken meerdere categorieën tegelijk (te dubbelzinnig om ergens
-// aan toe te wijzen) — evenmin "Origin", dat zowel bij ramen als bij
-// pergola opduikt in de opmerkingen. Vul gerust aan/corrigeer.
+// Bron van waarheid: CATEGORIE_TREFWOORDEN.xlsx (in de werkmap naast deze
+// repo) — Gwenn's eigen lijst van merk-/productnamen per categorie, met
+// enkele algemene trefwoorden erbovenop. Dat bestand is de plek om dit uit
+// te breiden (nieuwe rij bijvoegen); geef door welke rijen toegevoegd zijn
+// en ik neem ze hier over. De brondata-kolommen staan in de praktijk zo
+// goed als altijd leeg, dus dit is de hoofdbron, niet enkel een fallback.
 const KEYWORDS = {
-  screens: ['screen', 'screens', 'zonnescherm', 'zonneschermen', 'doek', 'fusion', 'zip', 'vert shading', 'vertical shading'],
-  shutters: ['rolluik', 'rolluiken', 'rolluiklamel', 'shutter', 'shutters', 'volet', 'volets'],
-  awnings: ['luifel', 'luifels', 'markies', 'markiezen', 'awning', 'awnings', 'store', 'knikarm', 'knikarmscherm'],
-  pergola: ['pergola', "pergola's", 'so', 'verandasol', 'lumi', 'linasolar', 'veranda'],
-  home: ['schrijnwerk', 'iqon', 'raam', 'ramen', 'deur', 'deuren', 'poort', 'poorten', 'kozijn', 'kozijnen'],
+  screens: [
+    'SolFix', 'SolarFix', 'Solscreen', 'ClimaFix',
+    'screen', 'screens', 'zonnescherm', 'zonneschermen',
+  ],
+  shutters: [
+    'Voorzet', 'opbouw rolluik', 'SolarBox', 'inbouw rolluik', 'ClimaBox',
+    'rolluik', 'rolluiken', 'shutter', 'shutters', 'volet', 'volets',
+  ],
+  fusion: [
+    'Fusion', 'Fuison', 'SolarFuse',
+  ],
+  awnings: [
+    'lumisol', 'linasol', 'Luno', 'squaro', 'C1200', 'C2500', 'C550', 'loft', 'combisol', 'acryl (doek)',
+    'store banne', 'luifel', 'luifels', 'tent', 'knikarm', 'knikarmscherm',
+    'markies', 'markiezen', 'awning', 'awnings',
+  ],
+  pergola: [
+    "SO!", 'L!V', 'Origin', "Orig!n", 'Z!P', 'Z!P Cube',
+    'lamellendak', 'lamel', 'pergola', "pergola's",
+  ],
+  outdoor: [
+    'Verandasol', 'Wincube', 'Alubox',
+  ],
+  home: [
+    'Iqon', 'PVC', 'Allura', 'Artica', 'steellook', 'Aurora', 'Imperia', 'Qubic', 'Centriq', 'Retro & retrolux', 'Moov',
+    'schrijnwerk', 'raam', 'ramen', 'deur', 'deuren', 'poort', 'poorten', 'kozijn', 'kozijnen',
+  ],
 };
 
 // Kolom-hints: dekt zowel de kolomnamen uit oudere exports als de huidige
@@ -49,7 +71,7 @@ const COLUMN_HINTS = {
   home: 'home', windows: 'home', garage: 'home',
   shutter: 'shutters',
   screens: 'screens',
-  outdoor: 'pergola', // zwakke aanname bij gebrek aan betere kolom
+  outdoor: 'outdoor',
 };
 
 // Bron-kolom om het potentieel (€) van een categorie uit te lezen, met
@@ -57,14 +79,20 @@ const COLUMN_HINTS = {
 const POTENTIAL_COLUMN = {
   screens: 'vertical shading',
   shutters: 'vertical shading',
+  fusion: null,
   awnings: 'luifels',
   pergola: null,
+  outdoor: 'outdoor',
   home: 'home',
 };
 
+// Eigen woordgrens i.p.v. \b: trefwoorden als "SO!" of "Z!P" bevatten
+// leestekens waar \b niet correct mee omgaat (geen grens tussen "!" en een
+// spatie). Voorkomt zowel gemiste matches (SO! met spatie erna) als valse
+// treffers middenin een ander woord (bv. "so" in "persoon").
 function matchesKeyword(text, word) {
   const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+  return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'i').test(text);
 }
 
 const POTENTIAL_MIDPOINTS = {
@@ -75,7 +103,7 @@ const POTENTIAL_MIDPOINTS = {
 // Max. aantal opmerkingen per categorie/deel dat naar de AI gaat voor de
 // kwalitatieve synthese (kost/prompt-grootte begrenzen). Telt niet mee voor
 // de harde cijfers (aantallen, potentieel) — die gebruiken altijd alle rijen.
-// Met 5 categorieën x 2 delen kan dit snel oplopen (een rij kan nu in
+// Met 7 categorieën x 2 delen kan dit snel oplopen (een rij kan nu in
 // meerdere categorieën tegelijk vallen); te hoog gaf een 502 (prompt te
 // groot/te traag). 60 blijft ruim voldoende om terugkerende thema's te
 // herkennen.

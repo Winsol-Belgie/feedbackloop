@@ -43,12 +43,21 @@ prospect), met de kolom `Reason` als fallback.
 Geen Git-koppeling nodig; deploy gebeurt manueel vanaf je eigen machine met
 de Cloudflare CLI (zoals bij je andere projecten).
 
+> **Let op — Pages, niet Workers:** deze tool is een *Cloudflare Pages*-project
+> (statische site + Pages Functions), geen los Worker-script. Gebruik dus
+> steeds `wrangler pages deploy .` / `wrangler pages ...`, nooit het kale
+> `wrangler deploy` — dat is een ander Cloudflare-product en maakt een lege
+> "Hello World"-Worker aan in plaats van deze tool te deployen.
+
 Eenmalig:
 
 ```bash
 cd app
-npm install          # installeert wrangler als devDependency
-npx wrangler login   # indien nog niet ingelogd op dit toestel
+npm install
+# Login enkel nodig als je nog GEEN CLOUDFLARE_API_TOKEN in je omgeving hebt
+# staan. Heb je die al (zoals bij je andere projecten), sla deze stap over —
+# wrangler gebruikt die token automatisch en `wrangler login` zal net weigeren.
+npx wrangler login
 
 # Pages-project + secret aanmaken (eenmalig)
 npx wrangler pages project create feedbackloop
@@ -64,9 +73,10 @@ npx wrangler pages deploy .
 # of: npm run deploy
 ```
 
-Wrangler geeft na deploy meteen de werkende `*.pages.dev`-URL. Een eigen
-domein koppelen kan later via het Cloudflare-dashboard (Workers & Pages →
-feedbackloop → Custom domains) — dat vereist geen Git-koppeling en dus ook
+Wrangler geeft dan een werkende `*.pages.dev`-URL (niet `*.workers.dev` — dat
+laatste wijst op een per-ongeluk aangemaakte Worker, zie hierboven). Een
+eigen domein koppelen kan later via het Cloudflare-dashboard (Workers & Pages
+→ feedbackloop → Custom domains) — dat vereist geen Git-koppeling en dus ook
 geen org-owner-rechten.
 
 `wrangler.toml` staat al klaar met `pages_build_output_dir = "."`, dus de

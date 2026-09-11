@@ -192,6 +192,7 @@ function buildPrompt(category, existing, prospecting) {
     'Geef voor "technical_issues" en "feature_requests" gewoon een lege lijst terug als die er niet zijn — verzin niets.',
     'BELANGRIJK: bij elk thema/probleem/wens/drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema/probleem/wens zonder dat er minstens één klant met naam achter zit.',
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
+    'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie (bv. "Bezoek", "Stalen afgegeven", "Offerte opgenomen") — daar valt geen thema uit te halen. Bouw thema\'s NIET door de opmerkingen van één en dezelfde klant meermaals te herformuleren tot ogenschijnlijk verschillende thema\'s: dat oogt als brede consensus terwijl het één mening is. Als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, beperk het aantal thema\'s daartoe en vermeld dat expliciet in "general_impression" (bv. "De meeste van de X rapporten zijn bezoeknotities zonder uitgesproken klantopinie; de feedback hieronder komt vrijwel volledig van klant Y."). Geef bij voorkeur, en enkel waar de data dat echt draagt, thema\'s die op verschillende klanten gebaseerd zijn.',
     '',
     '--- BESTAANDE KLANTEN ---',
     formatRemarks(existing.remarks),

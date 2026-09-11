@@ -59,10 +59,23 @@ const KEYWORDS = {
     'lumisol', 'linasol', 'Luno', 'squaro', 'C1200', 'C2500', 'C550', 'loft', 'combisol', 'acryl (doek)',
     'store banne', 'luifel', 'luifels', 'tent', 'knikarm', 'knikarmscherm',
     'markies', 'markiezen', 'awning', 'awnings',
+    // powerbandarm(en): onderdeel van een luifel (motor-/draagarm) — komt zo
+    // in de echte remarks voor ("vervanging van powerbandarmen" bij een
+    // luifel-herstelling); niet in CATEGORIE_TREFWOORDEN.xlsx, toegevoegd
+    // n.a.v. concrete data. Graag ook bevestigen/overnemen in dat bestand.
+    'powerbandarm', 'powerbandarmen',
   ],
   pergola: [
     "SO!", 'L!V', 'Origin', "Orig!n", 'Z!P', 'Z!P Cube',
     'lamellendak', 'lamel', 'pergola', "pergola's",
+    // Meervoud/typografische varianten die in de echte remarks voorkomen
+    // maar niet matchten door de strikte woordgrens: "lamellen" (meervoud
+    // van "lamel" — het enkelvoud komt in de praktijk nooit los voor) en
+    // "ZIP" zonder "!" (in 500 rijen: 34x "ZIP", 0x het letterlijke "Z!P").
+    // Dit was de eigenlijke oorzaak van de Pergola-content die nog bij
+    // Screens verscheen: die zinnen werden niet herkend als "over Pergola",
+    // en golden daardoor als neutrale/algemene tekst die overal bleef staan.
+    'lamellen', 'ZIP',
   ],
   outdoor: [
     'Verandasol', 'Wincube', 'Alubox',
@@ -292,8 +305,15 @@ function splitSentences(text) {
 // wel gewoon meetellen in de harde cijfers, via classifyCategories).
 function filterRemarkForCategory(remark, targetCat) {
   if (!remark) return remark;
+  // Geen "als er toch maar 1 fragment is, stuur dan alles door"-kortsluiting
+  // meer: ook een opmerking zónder splitsbare punctuatie (bv. één enkele
+  // zin met alleen een komma, "Terugkerend lawaaiprobleem aan lamellen, X
+  // interventies") moet gewoon tegen het trefwoordenfilter aangehouden
+  // worden. Zonder deze check liep zo'n volledig off-topic opmerking
+  // ongefilterd door naar elke categorie waarin de rij toevallig óók zat
+  // (bv. via een ingevulde kolom) — dat was de oorzaak van Pergola-content
+  // (lamellen) die nog bij Screens verscheen.
   const segments = splitSentences(remark);
-  if (segments.length <= 1) return remark;
   const kept = segments.filter((seg) => {
     const segCats = categoriesInText(seg);
     return segCats.size === 0 || segCats.has(targetCat);

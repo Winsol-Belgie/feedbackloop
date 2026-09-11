@@ -1,20 +1,30 @@
 /* Winsol Feedbackloop — client-side logic
  * 1) Parse uploaded CRM-export (xlsx/xls/csv, incl. legacy SpreadsheetML .xls)
- * 2) Classify each row into Screens / Shutters / Awnings / Pergola +
- *    bestaande klant vs. prospect
+ * 2) Classify each row into Screens / Shutters / Fusion / Luifels / Pergola /
+ *    Outdoor / Home + bestaande klant vs. prospect
  * 3) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie de
  *    klanten zijn) — dat gaat dus nooit "gokken"
  * 4) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar de
  *    Worker (worker.js), die Claude vraagt om de kwalitatieve synthese
- * 5) Render het resultaat, met per thema/drempel uitklapbaar wélke klanten
- *    erachter zitten
+ * 5) Render het resultaat, met per thema/probleem/wens/drempel uitklapbaar
+ *    wélke klanten erachter zitten
  *
  * Categorisering: de CRM-kolommen "Vertical shading" en "Luifels" geven een
  * hint (indien ingevuld), maar zijn in de praktijk vaak leeg. Daarom wordt
  * voor élke rij ook de vrije tekst (Remark, kolom M — plus Re/Reason)
  * doorzocht op trefwoorden (KEYWORDS hieronder) om af te leiden over welk
  * product het gaat — dat is de enige bron voor Pergola, en de fallback voor
- * de andere drie. Pas de trefwoordenlijsten hier gerust aan.
+ * de andere categorieën. Pas de trefwoordenlijsten hier gerust aan.
+ *
+ * Eén opmerking kan tekst over meerdere categorieën bevatten (bv. een
+ * bezoekrapport dat zowel over Screens als over een Pergola-project gaat).
+ * De rij telt dan terecht mee in de harde cijfers van beide categorieën.
+ * Maar om te vermijden dat de AI, bij het analyseren van bv. Screens, ook
+ * de Pergola-zinnen in diezelfde opmerking oppikt ("lekkage" tussen
+ * categorieën), wordt de tekst die naar de AI gaat eerst per categorie
+ * gefilterd: zinnen/fragmenten die duidelijk over een ándere categorie gaan
+ * worden weggelaten (zie filterRemarkForCategory). De harde cijfers zelf
+ * blijven ongemoeid — enkel de AI-input wordt gefilterd.
  */
 
 const CATEGORY_LABELS = {
@@ -102,6 +112,18 @@ function matchesKeyword(text, word) {
 function matchesBareSO(text) {
   if (/(^|[^a-zA-Z0-9])SO($|[^a-zA-Z0-9])/.test(text)) return true;
   return matchesKeyword(text, 'so') && matchesKeyword(text, 'pergola');
+}
+
+// Welke categorieën komen voor in een los stukje tekst (op basis van de
+// trefwoorden) — gedeeld door classifyCategories (hele rij) en
+// filterRemarkForCategory (per zin, voor de AI-input).
+function categoriesInText(text) {
+  const cats = new Set();
+  for (const cat of Object.keys(KEYWORDS)) {
+    if (KEYWORDS[cat].some((w) => matchesKeyword(text, w))) cats.add(cat);
+  }
+  if (matchesBareSO(text)) cats.add('pergola');
+  return cats;
 }
 
 const POTENTIAL_MIDPOINTS = {
@@ -205,10 +227,7 @@ function classifyCategories(row) {
   }
 
   // Trefwoorden in de vrije tekst — hoofdbron (zie comment bij KEYWORDS).
-  for (const cat of Object.keys(KEYWORDS)) {
-    if (KEYWORDS[cat].some((w) => matchesKeyword(text, w))) cats.add(cat);
-  }
-  if (matchesBareSO(text)) cats.add('pergola');
+  for (const c of categoriesInText(text)) cats.add(c);
 
   return [...cats];
 }
@@ -248,10 +267,48 @@ function buildAggregation(rows) {
   return agg;
 }
 
+// Splitst een opmerking in losse fragmenten, zodat filterRemarkForCategory
+// per fragment kan beoordelen of het over de gevraagde categorie gaat.
+// Bewust NIET splitsen op "!" of "?": een aantal merknamen bevatten een "!"
+// (SO!, Z!P, Orig!n) en dat zou die stukmaken. We splitsen op:
+//  - een punt/puntkomma gevolgd door witruimte ("Tevreden. Wil ook...")
+//  - nieuwe regels
+//  - een lang streepje tussen spaties ("—"), want dat is precies het teken
+//    waarmee de Remark- en Re-kolom hierboven samengevoegd worden — vaak
+//    exact de plek waar twee verschillende onderwerpen samenkomen.
+function splitSentences(text) {
+  return text
+    .split(/(?<=[.;])\s+|\n+|\s+—\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// Filtert een opmerking voor een specifieke categorie: fragmenten die
+// duidelijk (enkel) over een ándere categorie gaan worden weggelaten, zodat
+// die inhoud niet "lekt" naar de AI-analyse van deze categorie. Fragmenten
+// zonder herkenbaar categorie-trefwoord (algemene zinnen als "goed
+// tevreden") blijven altijd staan. Als er niets overblijft na filtering,
+// wordt de opmerking niet meegestuurd voor déze categorie (de klant blijft
+// wel gewoon meetellen in de harde cijfers, via classifyCategories).
+function filterRemarkForCategory(remark, targetCat) {
+  if (!remark) return remark;
+  const segments = splitSentences(remark);
+  if (segments.length <= 1) return remark;
+  const kept = segments.filter((seg) => {
+    const segCats = categoriesInText(seg);
+    return segCats.size === 0 || segCats.has(targetCat);
+  });
+  return kept.join(' ');
+}
+
 // Beperkte remarks-lijst (met klantnaam) om naar de AI te sturen — enkel
-// klanten die ook effectief iets geschreven hebben.
-function remarksForAi(customers) {
-  return customers.filter((c) => c.remark).slice(0, MAX_REMARKS_TO_AI);
+// klanten die ook effectief iets geschreven hebben dat (na filtering) over
+// déze categorie gaat.
+function remarksForAi(customers, targetCat) {
+  const filtered = customers
+    .map((c) => ({ name: c.name, remark: filterRemarkForCategory(c.remark, targetCat) }))
+    .filter((c) => c.remark);
+  return filtered.slice(0, MAX_REMARKS_TO_AI);
 }
 
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
@@ -272,9 +329,9 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          category: cat,
-          existing: { remarks: remarksForAi(v.existing.customers) },
-          prospecting: { remarks: remarksForAi(v.prospecting.customers), potentialSum: v.prospecting.potentialSum },
+          category: CATEGORY_LABELS[cat],
+          existing: { remarks: remarksForAi(v.existing.customers, cat) },
+          prospecting: { remarks: remarksForAi(v.prospecting.customers, cat), potentialSum: v.prospecting.potentialSum },
         }),
       });
       if (!res.ok) {
@@ -363,6 +420,10 @@ function renderResults(agg, aiCategories) {
         ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten')}
         <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
         ${renderThemes(existingAi.themes)}
+        <h2 class="part-title" style="margin-top:18px;">Technische meldingen</h2>
+        ${renderIssueGroups(existingAi.technical_issues, 'issue', 'probleem')}
+        <h2 class="part-title" style="margin-top:18px;">Gewenste features</h2>
+        ${renderIssueGroups(existingAi.feature_requests, 'request', 'wens')}
         <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
         <p class="narrative">${escapeHtml(existingAi.benchmark_product || '—')}</p>
         <h2 class="part-title" style="margin-top:18px;">Benchmark prijs</h2>
@@ -393,24 +454,40 @@ function renderCustomerList(customers, label) {
   return `<details class="customers-list"><summary>${label} (${customers.length})</summary><ul class="customer-names">${items}</ul></details>`;
 }
 
+// Eén uitklapbaar blokje (thema/probleem/wens/drempel) met de klantnamen
+// erachter en een badge (sentiment-pill of vast label) rechts.
+function renderDetailsBlock(label, names, badgeHtml) {
+  const inner = names.length
+    ? `<div class="customer-list">${names.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`
+    : '';
+  return `
+    <details class="theme-details">
+      <summary>
+        <span>${escapeHtml(label || '')}</span>
+        <span>${badgeHtml} <span class="count-badge">${names.length}</span></span>
+      </summary>
+      ${inner}
+    </details>
+  `;
+}
+
 function renderThemes(themes) {
   if (!themes || !themes.length) return '<p class="narrative">—</p>';
   return themes.map((t) => {
     const names = t.customers || [];
-    const label = t.label || '';
     const sentiment = t.sentiment || 'neutral';
-    const inner = names.length
-      ? `<div class="customer-list">${names.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`
-      : '';
-    return `
-      <details class="theme-details">
-        <summary>
-          <span>${escapeHtml(label)}</span>
-          <span><span class="pill ${sentiment}">${sentiment}</span> <span class="count-badge">${names.length}</span></span>
-        </summary>
-        ${inner}
-      </details>
-    `;
+    return renderDetailsBlock(t.label, names, `<span class="pill ${sentiment}">${sentiment}</span>`);
+  }).join('');
+}
+
+// Technische meldingen / gewenste features: zelfde uitklap-opmaak als
+// renderThemes, maar met een vast badge-label i.p.v. sentiment (positief/
+// negatief zegt hier niets — het gaat om "is dit gemeld", niet om toon).
+function renderIssueGroups(items, badgeClass, badgeText) {
+  if (!items || !items.length) return '<p class="narrative">Geen gemeld.</p>';
+  return items.map((t) => {
+    const names = t.customers || [];
+    return renderDetailsBlock(t.label, names, `<span class="pill ${badgeClass}">${badgeText}</span>`);
   }).join('');
 }
 

@@ -10,10 +10,23 @@
 // fix voor de 502 die optrad toen alle categorieën in één grote aanroep
 // zaten.
 //
+// De frontend filtert de opmerkingen al vooraf per categorie (fragmenten
+// die duidelijk over een ándere categorie gaan worden weggelaten — zie
+// filterRemarkForCategory in app.js). De instructie hieronder is de tweede
+// laag van diezelfde bescherming: mocht er toch nog gemengde inhoud
+// binnenkomen, dan negeert Claude expliciet wat niet over de gevraagde
+// categorie gaat.
+//
 // Claude krijgt per klant-opmerking ook de klantnaam mee, en moet in zijn
-// thema's/drempels exact diezelfde namen citeren (i.p.v. enkel een cijfer
-// op te geven) — zo blijft "hoeveel klanten" herleidbaar tot wélke klanten,
-// in plaats van een verzonnen telling.
+// thema's/meldingen/wensen/drempels exact diezelfde namen citeren (i.p.v.
+// enkel een cijfer op te geven) — zo blijft "hoeveel klanten" herleidbaar
+// tot wélke klanten, in plaats van een verzonnen telling.
+//
+// Voor "Deel 1 — Bestaande klanten" wordt de input in drie aparte groepen
+// gesplitst (themes / technical_issues / feature_requests) i.p.v. één
+// algemene lijst — dat is precies de indeling die bruikbaar is als input
+// voor een R&D/PM-roadmap: sentiment apart van concrete defecten, en
+// defecten apart van functiewensen.
 
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
@@ -40,11 +53,44 @@ const ANALYSIS_TOOL = {
               },
               required: ['label', 'sentiment', 'customers'],
             },
+            description: 'General voice-of-customer sentiment/experience themes (satisfaction, impression, service, ...). Not technical defects and not feature requests — those go in the separate fields below.',
+          },
+          technical_issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string', description: 'Concrete technical problem/defect/complaint, e.g. "motor defect na installatie".' },
+                customers: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Exact customer names (copied verbatim) reporting this issue.',
+                },
+              },
+              required: ['label', 'customers'],
+            },
+            description: 'Concrete technical problems, defects, quality or installation/service complaints — grouped by topic. Empty array if none reported. This is the primary input for R&D quality follow-up.',
+          },
+          feature_requests: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string', description: 'Functionality/option the customer misses or explicitly wants, e.g. "gemotoriseerde bediening via app".' },
+                customers: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Exact customer names (copied verbatim) who mentioned this.',
+                },
+              },
+              required: ['label', 'customers'],
+            },
+            description: 'Missing functionality or explicitly wished-for features/options — grouped by topic. Empty array if none reported. This is the primary input for product roadmap prioritisation.',
           },
           benchmark_product: { type: 'string', description: 'What customers say about specs/offering vs competitors.' },
           benchmark_price: { type: 'string', description: 'What customers say about pricing vs competitors.' },
         },
-        required: ['general_impression', 'themes', 'benchmark_product', 'benchmark_price'],
+        required: ['general_impression', 'themes', 'technical_issues', 'feature_requests', 'benchmark_product', 'benchmark_price'],
       },
       prospecting: {
         type: 'object',
@@ -138,9 +184,14 @@ export default {
 function buildPrompt(category, existing, prospecting) {
   return [
     `Je analyseert feedback van sales-bezoekrapporten voor Winsol, specifiek voor de productcategorie "${category}" (zonwering/schrijnwerk).`,
-    'Geef een genuanceerde, feitelijke synthese in het Nederlands.',
-    'BELANGRIJK: bij elk thema/elke drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema zonder dat er minstens één klant met naam achter zit.',
-    'Als er geen of nauwelijks remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
+    `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen thema, probleem, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
+    'Geef een genuanceerde, feitelijke synthese in het Nederlands. Verdeel de input voor bestaande klanten in drie aparte groepen (een opmerking mag in meerdere groepen terugkomen als ze meerdere aspecten bevat):',
+    '1. "themes" — algemene ervaring/sentiment (tevredenheid, indruk, service in het algemeen, ...).',
+    '2. "technical_issues" — concrete technische problemen, defecten, klachten over werking, kwaliteit, montage of service. Dit is input voor R&D-kwaliteitsopvolging.',
+    '3. "feature_requests" — functionaliteit of opties die de klant mist of expliciet wenst. Dit is input voor de product-roadmap.',
+    'Geef voor "technical_issues" en "feature_requests" gewoon een lege lijst terug als die er niet zijn — verzin niets.',
+    'BELANGRIJK: bij elk thema/probleem/wens/drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema/probleem/wens zonder dat er minstens één klant met naam achter zit.',
+    'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
     '',
     '--- BESTAANDE KLANTEN ---',
     formatRemarks(existing.remarks),

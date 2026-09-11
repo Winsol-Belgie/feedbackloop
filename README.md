@@ -121,6 +121,15 @@ git push
 - Enkel frontend gewijzigd (`index.html`/`app.js`): gewoon `git push` —
   GitHub Pages update vanzelf.
 - `worker.js` gewijzigd: `npx wrangler deploy` opnieuw draaien.
+- **`app.js` gewijzigd?** Bump dan ook het versienummer in de
+  `<script src="app.js?v=...">`-regel onderaan `index.html` (bv. naar de
+  huidige datum/tijd). Zonder die wijziging kan een browser het oude,
+  gecachete `app.js` blijven tonen na een gewone refresh — de pagina zelf
+  (`index.html`) ziet er dan al bijgewerkt uit (nieuwe knoppen, tekst...)
+  maar het gedrag erachter is nog het oude. Een andere `?v=`-waarde dwingt
+  de browser om het bestand opnieuw op te halen. Bij twijfel: harde
+  refresh (Ctrl+F5 / Cmd+Shift+R) lost het ook op, maar de versiebump
+  voorkomt dat gebruikers dat zelf moeten weten.
 
 ## Lokaal testen
 

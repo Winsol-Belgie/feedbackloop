@@ -74,14 +74,19 @@ const KEYWORDS = {
   ],
   pergola: [
     "SO!", 'L!V', 'Origin', "Orig!n", 'Z!P', 'Z!P Cube',
-    'lamellendak', 'lamel', 'pergola', "pergola's",
+    'lamellendak', 'pergola', "pergola's",
+    // "lamel" (enkelvoud) bewust NIET als trefwoord: dat woord wordt ook
+    // gebruikt voor lamellen van een rolluik, en zou dan onterecht als
+    // Pergola-content herkend worden. "lamellen" (meervoud) hieronder is
+    // in de praktijk wel specifiek genoeg voor het lamellendak van een
+    // pergola (bevestigd door Gwenn, zie CATEGORIE_TREFWOORDEN.xlsx).
+    //
     // Meervoud/typografische varianten die in de echte remarks voorkomen
-    // maar niet matchten door de strikte woordgrens: "lamellen" (meervoud
-    // van "lamel" — het enkelvoud komt in de praktijk nooit los voor) en
-    // "ZIP" zonder "!" (in 500 rijen: 34x "ZIP", 0x het letterlijke "Z!P").
-    // Dit was de eigenlijke oorzaak van de Pergola-content die nog bij
-    // Screens verscheen: die zinnen werden niet herkend als "over Pergola",
-    // en golden daardoor als neutrale/algemene tekst die overal bleef staan.
+    // maar niet matchten door de strikte woordgrens: "lamellen" en "ZIP"
+    // zonder "!" (in 500 rijen: 34x "ZIP", 0x het letterlijke "Z!P"). Dit
+    // was de eigenlijke oorzaak van Pergola-content die nog bij Screens
+    // verscheen: die zinnen werden niet herkend als "over Pergola", en
+    // golden daardoor als neutrale/algemene tekst die overal bleef staan.
     'lamellen', 'ZIP',
   ],
   outdoor: [

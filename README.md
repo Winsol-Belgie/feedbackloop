@@ -23,12 +23,14 @@ API als Worker op Cloudflare.**
 
 ## Categorieën
 
-De 5 tabbladen volgen rechtstreeks de kolommen uit de CRM-export: Outdoor,
-Home, Luifels, en Vertical shading — dat laatste wordt gesplitst in
-**Screens** en **Rolluiken**, want daar is geen aparte brondata-kolom voor.
-Die split gebeurt via trefwoorden in de opmerkingen (`ROLLUIKEN_KEYWORDS`
-bovenaan `app.js`: rolluik/shutter/volet) — geen match betekent Screens
-(de meest voorkomende van de twee). Pas die keywordlijst aan indien nodig.
+De 4 tabbladen zijn Screens, Shutters (Rolluiken), Awnings (Luifels) en
+Pergola's. De CRM-kolommen "Vertical shading" en "Luifels" geven een hint
+als ze ingevuld zijn, maar zijn in de praktijk vaak leeg — daarom wordt voor
+élke rij ook de vrije tekst (kolom `Remark`, plus `Re`/`Reason`) doorzocht
+op trefwoorden (`KEYWORDS` bovenaan `app.js`). Dat is de enige bron voor
+Pergola (geen brondata-kolom) en de fallback voor de andere drie. Pas de
+trefwoordenlijsten gerust aan als je merkt dat iets verkeerd of niet
+ingedeeld wordt.
 
 Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =

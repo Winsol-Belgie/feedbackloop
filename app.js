@@ -1,7 +1,7 @@
 /* Winsol Feedbackloop — client-side logic
  * 1) Parse uploaded CRM-export (xlsx/xls/csv, incl. legacy SpreadsheetML .xls)
- * 2) Classify each row into a product categorie (rechtstreeks op basis van de
- *    Excel-kolommen zelf, geen giswerk) + bestaande klant vs. prospect
+ * 2) Classify each row into Screens / Shutters / Awnings / Pergola +
+ *    bestaande klant vs. prospect
  * 3) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie de
  *    klanten zijn) — dat gaat dus nooit "gokken"
  * 4) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar de
@@ -9,31 +9,36 @@
  * 5) Render het resultaat, met per thema/drempel uitklapbaar wélke klanten
  *    erachter zitten
  *
- * Categorieën = rechtstreeks de kolommen uit de CRM-export (Outdoor / Home /
- * Vertical shading / Luifels), met één uitzondering op vraag van Gwenn:
- * "Vertical shading" wordt gesplitst in Screens en Rolluiken. Er is geen
- * aparte kolom voor die twee, dus dat gebeurt via trefwoorden in de
- * opmerkingen (ROLLUIKEN_KEYWORDS hieronder) — geen match = Screens
- * (de meest voorkomende van de twee).
+ * Categorisering: de CRM-kolommen "Vertical shading" en "Luifels" geven een
+ * hint (indien ingevuld), maar zijn in de praktijk vaak leeg. Daarom wordt
+ * voor élke rij ook de vrije tekst (Remark, kolom M — plus Re/Reason)
+ * doorzocht op trefwoorden (KEYWORDS hieronder) om af te leiden over welk
+ * product het gaat — dat is de enige bron voor Pergola, en de fallback voor
+ * de andere drie. Pas de trefwoordenlijsten hier gerust aan.
  */
 
 const CATEGORY_LABELS = {
-  outdoor: 'Outdoor',
-  home: 'Home',
   screens: 'Screens',
-  rolluiken: 'Rolluiken',
-  luifels: 'Luifels',
+  shutters: 'Shutters (Rolluiken)',
+  awnings: 'Awnings (Luifels)',
+  pergola: "Pergola's",
 };
 
-const ROLLUIKEN_KEYWORDS = ['rolluik', 'shutter', 'volet'];
+const KEYWORDS = {
+  screens: ['screen', 'zonnescherm', 'doek'],
+  shutters: ['rolluik', 'shutter', 'volet'],
+  awnings: ['luifel', 'markies', 'awning', 'store'],
+  pergola: ['pergola', 'so!', 'iqon', 'zip', 'veranda'],
+};
 
-// Bron-kolom om het potentieel (€) van een categorie uit te lezen.
+// Bron-kolom om het potentieel (€) van een categorie uit te lezen, met
+// generieke "Potential"-kolom als fallback (o.a. voor Pergola, die geen
+// eigen brondata-kolom heeft).
 const POTENTIAL_COLUMN = {
-  outdoor: 'outdoor',
-  home: 'home',
   screens: 'vertical shading',
-  rolluiken: 'vertical shading',
-  luifels: 'luifels',
+  shutters: 'vertical shading',
+  awnings: 'luifels',
+  pergola: null,
 };
 
 const POTENTIAL_MIDPOINTS = {
@@ -109,15 +114,22 @@ function parsePotential(str) {
 }
 
 function classifyCategories(row) {
-  const cats = [];
-  if (row['outdoor']) cats.push('outdoor');
-  if (row['home']) cats.push('home');
-  if (row['luifels']) cats.push('luifels');
+  const cats = new Set();
+  const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
+
+  // Kolom-hints, indien ingevuld.
+  if (row['luifels']) cats.add('awnings');
   if (row['vertical shading']) {
-    const text = [row['remark'], row['re'], row['reason']].join(' ').toLowerCase();
-    cats.push(ROLLUIKEN_KEYWORDS.some((w) => text.includes(w)) ? 'rolluiken' : 'screens');
+    cats.add(KEYWORDS.shutters.some((w) => text.includes(w)) ? 'shutters' : 'screens');
   }
-  return cats;
+
+  // Trefwoorden in de vrije tekst — primaire bron voor Pergola, fallback
+  // voor de rest wanneer de kolommen niets opleveren.
+  for (const cat of Object.keys(KEYWORDS)) {
+    if (KEYWORDS[cat].some((w) => text.includes(w))) cats.add(cat);
+  }
+
+  return [...cats];
 }
 
 function isExisting(row) {
@@ -147,7 +159,8 @@ function buildAggregation(rows) {
       if (existing) {
         agg[cat].existing.customers.push({ name, remark });
       } else {
-        const potStr = row[POTENTIAL_COLUMN[cat]] || row['potential'];
+        const col = POTENTIAL_COLUMN[cat];
+        const potStr = (col && row[col]) || row['potential'];
         agg[cat].prospecting.customers.push({ name, remark });
         agg[cat].prospecting.potentialSum += parsePotential(potStr);
       }

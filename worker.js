@@ -9,7 +9,7 @@
 // op te geven) — zo blijft "hoeveel klanten" herleidbaar tot wélke klanten,
 // in plaats van een verzonnen telling.
 
-const CATEGORY_KEYS = ['outdoor', 'home', 'screens', 'rolluiken', 'luifels'];
+const CATEGORY_KEYS = ['screens', 'shutters', 'awnings', 'pergola'];
 
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
@@ -134,7 +134,7 @@ export default {
 };
 
 function buildPrompt(aggregation) {
-  const parts = ['Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering: outdoor, home, screens, rolluiken, luifels).',
+  const parts = ['Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering: screens, shutters/rolluiken, awnings/luifels, pergolas).',
     'Voor elke productcategorie krijg je: de opmerkingen van bestaande klanten (met klantnaam), en de opmerkingen van prospects (met klantnaam) plus hun geschat potentieel in euro.',
     'Geef per categorie een genuanceerde, feitelijke synthese in het Nederlands.',
     'BELANGRIJK: bij elk thema/elke drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema zonder dat er minstens één klant met naam achter zit.',

@@ -188,6 +188,12 @@ const filterStatus = document.getElementById('filterStatus');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const statusText = document.getElementById('statusText');
 const analyzeStatus = document.getElementById('analyzeStatus');
+const uploadBody = document.getElementById('uploadBody');
+const uploadToggle = document.getElementById('uploadToggle');
+const uploadSummary = document.getElementById('uploadSummary');
+const filterBody = document.getElementById('filterBody');
+const filterToggle = document.getElementById('filterToggle');
+const filterSummary = document.getElementById('filterSummary');
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
@@ -205,6 +211,7 @@ function handleFile(file) {
   fname.textContent = file.name;
   setStatus('Bestand inlezen...');
   setAnalyzeStatus('');
+  setCollapsed(uploadBody, uploadToggle, uploadSummary, false);
   // Nieuw bestand: stap 1 (filter) moet opnieuw doorlopen worden voor er
   // geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
   // (klant/rep uit een vorig bestand) stilzwijgend blijft hangen.
@@ -241,8 +248,12 @@ filterBtn.addEventListener('click', () => {
   filterKlant.value = '';
 
   filterCard.hidden = false;
+  setCollapsed(filterBody, filterToggle, filterSummary, false);
   updateFilterStatus();
   setStatus(`${parsedRows.length} rijen ingelezen. Kies eventueel een filter en klik op "Analyseren".`);
+  // Bestand is gekozen en de filters staan klaar — de upload-kaart mag nu
+  // plaats maken (Gwenn: "na het filteren, klap dit deel in").
+  setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
 });
 
 filterRep.addEventListener('change', updateFilterStatus);
@@ -292,6 +303,41 @@ function setAnalyzeStatus(msg, isErr) {
   analyzeStatus.textContent = msg;
   analyzeStatus.className = 'status' + (isErr ? ' err' : '');
 }
+
+// Generieke in-/uitklap-helper voor de upload-kaart en de filter+analyseer-
+// kaart: verbergt de body, toont in de plaats een compacte samenvattingsregel
+// (bv. bestandsnaam, of de gekozen filters) zodat de context niet helemaal
+// verdwijnt. Wordt zowel automatisch aangeroepen (na Filteren/Analyseren,
+// om plaats te besparen — zie Gwenn's screenshot) als handmatig via de
+// pijltjesknop.
+function setCollapsed(bodyEl, toggleEl, summaryEl, collapsed, summaryText) {
+  bodyEl.hidden = collapsed;
+  toggleEl.setAttribute('aria-expanded', String(!collapsed));
+  toggleEl.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+  if (summaryEl) {
+    summaryEl.hidden = !collapsed;
+    summaryEl.closest('.card-head').classList.toggle('has-summary', collapsed);
+    if (collapsed && summaryText != null) summaryEl.textContent = summaryText;
+  }
+}
+
+function uploadSummaryText() {
+  const base = fname.textContent || 'Geen bestand gekozen';
+  return statusText.textContent ? `${base} — ${statusText.textContent}` : base;
+}
+
+function filterSummaryText() {
+  const repLabel = filterRep.value || 'alle reps';
+  const klantLabel = filterKlant.value || 'alle klanten';
+  return `Filter: ${repLabel} · ${klantLabel}${filterStatus.textContent ? ' — ' + filterStatus.textContent : ''}`;
+}
+
+uploadToggle.addEventListener('click', () => {
+  setCollapsed(uploadBody, uploadToggle, uploadSummary, !uploadBody.hidden, uploadSummaryText());
+});
+filterToggle.addEventListener('click', () => {
+  setCollapsed(filterBody, filterToggle, filterSummary, !filterBody.hidden, filterSummaryText());
+});
 
 function parsePotential(str) {
   if (!str) return 0;
@@ -494,6 +540,10 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
     setAnalyzeStatus(`Analyse voltooid op basis van ${filterNote}.`);
   }
   analyzeBtn.disabled = false;
+  // Analyse is klaar en de resultaten staan hierboven — de filterkaart mag
+  // nu plaats maken (Gwenn: "na het analyseren, klap ook dit deel in").
+  setCollapsed(filterBody, filterToggle, filterSummary, true,
+    `Filter: ${filterRep.value || 'alle reps'} · ${filterKlant.value || 'alle klanten'} — ${failed.length ? 'analyse deels mislukt' : 'analyse voltooid'} (${filterNote})`);
   if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
 });
 

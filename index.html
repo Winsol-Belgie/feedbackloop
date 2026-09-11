@@ -131,6 +131,16 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 .benchmark-col b{color:var(--ink-faint);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.02em;margin-right:4px;}
 #globalSummaryText{font-size:13.5px;color:var(--ink-soft);line-height:1.55;margin:0;}
 #globalSummaryText.loading{color:var(--ink-faint);font-style:italic;}
+
+/* In-/uitklapbare kaarten (upload-kaart, filter+analyseer-kaart) — na
+   "Filteren" resp. "Analyseren" klapt het bijbehorende deel automatisch in
+   om plaats te besparen; de gebruiker kan dit altijd zelf omkeren. */
+.card-head{display:flex;justify-content:flex-end;align-items:center;gap:10px;}
+.card-head.has-summary{justify-content:space-between;}
+.collapse-summary{margin:0;font-size:13px;font-weight:600;color:var(--ink);}
+.collapse-toggle{flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:8px;width:28px;height:28px;font-size:13px;line-height:1;cursor:pointer;color:var(--ink-soft);}
+.collapse-toggle:hover{background:var(--line);}
+#uploadBody,#filterBody{margin-top:4px;}
 </style>
 </head>
 <body>
@@ -141,38 +151,50 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
   </header>
 
   <div class="card">
-    <div class="dropzone" id="dropzone">
-      <p><strong>Sleep je Excel-bestand hierheen</strong> of klik om te bladeren</p>
-      <p class="fname" id="fname">Geen bestand gekozen</p>
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+    <div class="card-head">
+      <p class="collapse-summary" id="uploadSummary" hidden></p>
+      <button class="collapse-toggle" id="uploadToggle" type="button" aria-expanded="true" aria-controls="uploadBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
     </div>
-    <div class="row">
-      <button class="btn" id="filterBtn" disabled>Filteren</button>
-      <span class="status" id="statusText"></span>
+    <div id="uploadBody">
+      <div class="dropzone" id="dropzone">
+        <p><strong>Sleep je Excel-bestand hierheen</strong> of klik om te bladeren</p>
+        <p class="fname" id="fname">Geen bestand gekozen</p>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+      </div>
+      <div class="row">
+        <button class="btn" id="filterBtn" disabled>Filteren</button>
+        <span class="status" id="statusText"></span>
+      </div>
     </div>
   </div>
 
   <div class="card" id="filterCard" hidden>
-    <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
-    <p class="part-sub">Optioneel: kies een sales rep en/of klant. Enkel rapporten die aan beide voorwaarden voldoen (EN, niet OF) tellen mee voor de analyse. Laat op "Alle" staan om niet te filteren.</p>
-    <div class="filter-row">
-      <label class="filter-field">
-        <span>Sales Rep</span>
-        <select id="filterRep"><option value="">Alle</option></select>
-      </label>
-      <label class="filter-field">
-        <span>Klant</span>
-        <input id="filterKlant" list="filterKlantList" placeholder="Alle" autocomplete="off">
-        <datalist id="filterKlantList"></datalist>
-      </label>
+    <div class="card-head">
+      <p class="collapse-summary" id="filterSummary" hidden></p>
+      <button class="collapse-toggle" id="filterToggle" type="button" aria-expanded="true" aria-controls="filterBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
     </div>
-    <p class="status" id="filterStatus"></p>
-    <h2 class="part-title" style="margin-top:20px;"><span class="step-label">Stap 2</span>Analyseren</h2>
-    <div class="row">
-      <button class="btn" id="analyzeBtn" disabled>Analyseren</button>
-      <span class="status" id="analyzeStatus"></span>
+    <div id="filterBody">
+      <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
+      <p class="part-sub">Optioneel: kies een sales rep en/of klant. Enkel rapporten die aan beide voorwaarden voldoen (EN, niet OF) tellen mee voor de analyse. Laat op "Alle" staan om niet te filteren.</p>
+      <div class="filter-row">
+        <label class="filter-field">
+          <span>Sales Rep</span>
+          <select id="filterRep"><option value="">Alle</option></select>
+        </label>
+        <label class="filter-field">
+          <span>Klant</span>
+          <input id="filterKlant" list="filterKlantList" placeholder="Alle" autocomplete="off">
+          <datalist id="filterKlantList"></datalist>
+        </label>
+      </div>
+      <p class="status" id="filterStatus"></p>
+      <h2 class="part-title" style="margin-top:20px;"><span class="step-label">Stap 2</span>Analyseren</h2>
+      <div class="row">
+        <button class="btn" id="analyzeBtn" disabled>Analyseren</button>
+        <span class="status" id="analyzeStatus"></span>
+      </div>
+      <div class="progress-track" id="progressBar" hidden><div class="progress-fill" id="progressFill"></div></div>
     </div>
-    <div class="progress-track" id="progressBar" hidden><div class="progress-fill" id="progressFill"></div></div>
   </div>
 
   <div id="results">

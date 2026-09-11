@@ -198,37 +198,73 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   analyzeBtn.disabled = true;
   setStatus('Data structureren...');
   const agg = buildAggregation(parsedRows);
-  setStatus('AI-analyse loopt, dit kan een minuut duren...');
-  try {
-    const res = await fetch(ANALYZE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        aggregation: Object.fromEntries(Object.entries(agg).map(([cat, v]) => [cat, {
+  const cats = Object.keys(CATEGORY_LABELS);
+  showProgress(0, cats.length);
+
+  // Eén (kleine, snelle) AI-aanroep per categorie, parallel — dat geeft
+  // een écht voortgangspunt (x van y klaar) in plaats van een nagebootste
+  // balk, en houdt elke aanroep klein genoeg om betrouwbaar te blijven.
+  let done = 0;
+  const results = await Promise.all(cats.map(async (cat) => {
+    const v = agg[cat];
+    try {
+      const res = await fetch(ANALYZE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: cat,
           existing: { remarks: remarksForAi(v.existing.customers) },
           prospecting: { remarks: remarksForAi(v.prospecting.customers), potentialSum: v.prospecting.potentialSum },
-        }])),
-      }),
-    });
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const errBody = await res.json();
-        detail = errBody.error || '';
-      } catch {
-        // response was not JSON (bv. een Cloudflare-foutpagina) — geen detail beschikbaar
+        }),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const errBody = await res.json();
+          detail = errBody.error || '';
+        } catch {
+          // response was not JSON (bv. een Cloudflare-foutpagina) — geen detail beschikbaar
+        }
+        throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
       }
-      throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
+      const data = await res.json();
+      return [cat, data.analysis, null];
+    } catch (err) {
+      return [cat, null, err.message];
+    } finally {
+      done++;
+      showProgress(done, cats.length);
     }
-    const data = await res.json();
-    renderResults(agg, data.categories);
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen.`);
-  } catch (err) {
-    setStatus('Analyse mislukt: ' + err.message, true);
-  } finally {
-    analyzeBtn.disabled = false;
+  }));
+
+  const aiCategories = {};
+  const failed = [];
+  for (const [cat, analysis, err] of results) {
+    if (analysis) aiCategories[cat] = analysis;
+    else failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
   }
+
+  renderResults(agg, aiCategories);
+  hideProgress();
+  if (failed.length) {
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
+  } else {
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen.`);
+  }
+  analyzeBtn.disabled = false;
 });
+
+function showProgress(done, total) {
+  const bar = document.getElementById('progressBar');
+  const fill = document.getElementById('progressFill');
+  bar.hidden = false;
+  fill.style.width = Math.round((done / total) * 100) + '%';
+  setStatus(`AI-analyse loopt: ${done}/${total} categorieën verwerkt...`);
+}
+
+function hideProgress() {
+  document.getElementById('progressBar').hidden = true;
+}
 
 function renderResults(agg, aiCategories) {
   const tabsEl = document.getElementById('tabs');

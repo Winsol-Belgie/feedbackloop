@@ -1,0 +1,4 @@
+in deze map, open de terminal
+
+1.  git push --force  (frontend naar github)
+2.  npx wrangler deploy  (backend naar Cloudflare)

@@ -20,7 +20,11 @@ API als Worker op Cloudflare.**
   om daar een inhoudelijke synthese van te maken (thema's, sentiment,
   drempels). De Anthropic API-sleutel staat **alleen** hier (Worker
   secret), nooit in de frontend-code. De frontend roept deze Worker
-  cross-origin aan (CORS zit al in `worker.js`).
+  cross-origin aan (CORS zit al in `worker.js`) — **5 keer parallel, één
+  aanroep per categorie.** Dat houdt elke prompt klein/snel (voorkomt de
+  502 die optrad bij één grote aanroep voor alle categorieën samen) én
+  geeft een echt voortgangspunt in de UI ("x/5 categorieën verwerkt"),
+  zonder extra vertraging.
 
 ## Categorieën
 

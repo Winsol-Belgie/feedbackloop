@@ -38,25 +38,41 @@ Bestaande klant vs. prospect wordt bepaald via de kolom `Status` (`Active
 Customer` = bestaand; `To be contacted` / `Not to be contacted again` =
 prospect), met de kolom `Reason` als fallback.
 
-## Deployen (eenmalig, ±10 min)
+## Deployen — handmatig via Wrangler
 
-1. Push deze repo naar GitHub (zie hoofdmap-instructies).
-2. Ga naar [Cloudflare dashboard](https://dash.cloudflare.com) → **Workers &
-   Pages** → **Create application** → **Pages** → **Connect to Git** → kies
-   `Winsol-Belgie/feedbackloop`.
-3. Build settings: **geen build command nodig**, laat "Build output
-   directory" op `app` staan (of verplaats deze map naar de repo-root — zie
-   hieronder). Framework preset: "None".
-4. Ga naar **Settings → Environment variables** van het Pages-project en
-   voeg toe:
-   - `ANTHROPIC_API_KEY` — jouw sleutel van
-     [console.anthropic.com](https://console.anthropic.com/settings/keys)
-     (Encrypt aanvinken).
-   - optioneel `CLAUDE_MODEL` als je een ander model wil gebruiken dan de
-     default.
-5. Deploy. Cloudflare geeft je een `*.pages.dev`-URL — die is meteen de
-   werkende tool. Een eigen domein koppelen kan later via dezelfde
-   instellingen.
+Geen Git-koppeling nodig; deploy gebeurt manueel vanaf je eigen machine met
+de Cloudflare CLI (zoals bij je andere projecten).
+
+Eenmalig:
+
+```bash
+cd app
+npm install          # installeert wrangler als devDependency
+npx wrangler login   # indien nog niet ingelogd op dit toestel
+
+# Pages-project + secret aanmaken (eenmalig)
+npx wrangler pages project create feedbackloop
+npx wrangler pages secret put ANTHROPIC_API_KEY --project-name=feedbackloop
+# → plak hier je sleutel van console.anthropic.com/settings/keys
+```
+
+Bij elke nieuwe versie:
+
+```bash
+cd app
+npx wrangler pages deploy .
+# of: npm run deploy
+```
+
+Wrangler geeft na deploy meteen de werkende `*.pages.dev`-URL. Een eigen
+domein koppelen kan later via het Cloudflare-dashboard (Workers & Pages →
+feedbackloop → Custom domains) — dat vereist geen Git-koppeling en dus ook
+geen org-owner-rechten.
+
+`wrangler.toml` staat al klaar met `pages_build_output_dir = "."`, dus de
+commando's hierboven werken zonder extra argumenten. Optioneel: zet
+`CLAUDE_MODEL` als extra secret/var als je een ander model wil gebruiken dan
+de default in `functions/analyze.js`.
 
 ### Een Anthropic API-sleutel aanmaken
 
@@ -64,23 +80,17 @@ prospect), met de kolom `Reason` als fallback.
    aan voor Winsol).
 2. **Settings → API keys → Create key**.
 3. Zorg voor voldoende krediet/budget op de organisatie (Billing).
-4. Kopieer de sleutel meteen (die is nadien niet meer zichtbaar) en zet ze
-   als `ANTHROPIC_API_KEY` in Cloudflare Pages zoals hierboven.
+4. Kopieer de sleutel meteen (die is nadien niet meer zichtbaar) en gebruik
+   ze bij `wrangler pages secret put` hierboven.
 
 ## Lokaal testen
 
-Deze tool heeft geen build-stap. Voor de frontend volstaat een simpele
-webserver:
-
 ```bash
-npx serve app
+cd app
+npm install
+npx wrangler pages dev .
 ```
 
-De `/analyze`-function heeft wel Cloudflare's runtime nodig om te draaien:
-
-```bash
-npx wrangler pages dev app
-```
-
-(zet dan `ANTHROPIC_API_KEY` in een lokaal `.env`-bestand of via
-`wrangler pages dev app --binding ANTHROPIC_API_KEY=sk-...`).
+Dit start de volledige tool lokaal, inclusief de `/analyze`-function (zet
+`ANTHROPIC_API_KEY` dan even in een lokaal `.env`-bestand, of geef ze mee als
+`--binding ANTHROPIC_API_KEY=sk-...`).

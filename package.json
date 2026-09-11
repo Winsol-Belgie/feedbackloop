@@ -1,0 +1,12 @@
+{
+  "name": "feedbackloop",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler pages dev .",
+    "deploy": "wrangler pages deploy .",
+    "secret:set-key": "wrangler pages secret put ANTHROPIC_API_KEY --project-name=feedbackloop"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

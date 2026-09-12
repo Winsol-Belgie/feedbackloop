@@ -201,38 +201,76 @@ dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropzone.classList.remove('drag');
-  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
 });
 fileInput.addEventListener('change', (e) => {
-  if (e.target.files[0]) handleFile(e.target.files[0]);
+  if (e.target.files.length) handleFiles(e.target.files);
 });
 
-function handleFile(file) {
-  fname.textContent = file.name;
-  setStatus('Bestand inlezen...');
+// Leest één bestand in en geeft de genormaliseerde rijen terug (of gooit een
+// fout) — los van handleFiles hieronder, zodat meerdere bestanden
+// onafhankelijk van elkaar (en parallel) ingelezen kunnen worden.
+function readFileRows(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        resolve({ fileName: file.name, sheetName: wb.SheetNames[0], rows: normalizeRows(rows) });
+      } catch (err) {
+        reject(new Error(`${file.name}: ${err.message}`));
+      }
+    };
+    reader.onerror = () => reject(new Error(`${file.name}: kon het bestand niet lezen`));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Verwerkt één of meerdere geselecteerde/gesleepte bestanden: elk apart
+// inlezen, samenvoegen tot één rijenlijst, en dubbele rapporten eruit
+// filteren (bv. wanneer twee maandexports elkaar in datum overlappen) — zie
+// dedupeRows. Vervangt de oude handleFile(file), die enkel het eerste
+// bestand verwerkte en de rest stilzwijgend negeerde.
+async function handleFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  fname.textContent = files.length === 1 ? files[0].name : `${files.length} bestanden: ${files.map((f) => f.name).join(', ')}`;
+  setStatus('Bestand(en) inlezen...');
   setAnalyzeStatus('');
   setCollapsed(uploadBody, uploadToggle, uploadSummary, false);
-  // Nieuw bestand: stap 1 (filter) moet opnieuw doorlopen worden voor er
-  // geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
-  // (klant/rep uit een vorig bestand) stilzwijgend blijft hangen.
+  // Nieuwe bestand(en): stap 1 (filter) moet opnieuw doorlopen worden voor
+  // er geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
+  // (klant/rep uit een vorige upload) stilzwijgend blijft hangen.
   filterCard.hidden = true;
   filterBtn.disabled = true;
   analyzeBtn.disabled = true;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const wb = XLSX.read(e.target.result, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      parsedRows = normalizeRows(rows);
-      setStatus(`${parsedRows.length} rijen ingelezen uit "${wb.SheetNames[0]}". Klik op "Filteren" om verder te gaan.`);
-      filterBtn.disabled = parsedRows.length === 0;
-    } catch (err) {
-      setStatus('Kon het bestand niet lezen: ' + err.message, true);
-      filterBtn.disabled = true;
-    }
-  };
-  reader.readAsArrayBuffer(file);
+
+  const settled = await Promise.allSettled(files.map(readFileRows));
+  const ok = [];
+  const failed = [];
+  settled.forEach((r) => {
+    if (r.status === 'fulfilled') ok.push(r.value);
+    else failed.push(r.reason.message);
+  });
+
+  if (!ok.length) {
+    setStatus('Kon geen van de bestanden lezen: ' + failed.join('; ') + '.', true);
+    filterBtn.disabled = true;
+    return;
+  }
+
+  const combined = ok.flatMap((r) => r.rows);
+  const { rows: deduped, removed } = dedupeRows(combined);
+  parsedRows = deduped;
+
+  const bronNote = ok.length === 1 ? `"${ok[0].sheetName}"` : `${ok.length} bestanden`;
+  let msg = `${combined.length} rijen ingelezen uit ${bronNote}`;
+  if (removed) msg += `, ${removed} dubbele rapporten (klant + datum + onderwerp) verwijderd → ${parsedRows.length} rijen over`;
+  msg += failed.length ? `. Mislukt: ${failed.join('; ')}.` : '. Klik op "Filteren" om verder te gaan.';
+  setStatus(msg, failed.length > 0);
+  filterBtn.disabled = parsedRows.length === 0;
 }
 
 // Stap 1 — Filteren: bouwt de twee filters op uit de ingelezen data (Sales
@@ -289,6 +327,35 @@ function normalizeRows(rows) {
     for (const k in r) norm[k.trim().toLowerCase()] = String(r[k] ?? '').trim();
     return norm;
   });
+}
+
+// Dubbele rapporten verwijderen — nodig wanneer meerdere geëxporteerde
+// bestanden elkaar in datum overlappen (bv. een YTD-export en een aparte
+// maandexport). Twee rijen worden als "hetzelfde rapport" beschouwd als
+// klant, datum ÉN onderwerp (de vrije tekst — Remark + Re) overeenkomen;
+// enkel op klant+datum dedupliceren zou ook twee ECHT verschillende
+// bezoeken op dezelfde dag bij dezelfde klant onterecht samenvoegen.
+// Vergelijking is hoofdletter-/spatie-ongevoelig zodat kleine
+// opmaakverschillen tussen twee exports (bv. dubbele spaties) geen
+// "nieuwe" rij opleveren.
+function dedupeKey(row) {
+  const name = (row['name'] || '').trim().toLowerCase();
+  const date = (row['date'] || '').trim().toLowerCase();
+  const subject = [row['remark'], row['re']].filter(Boolean).join(' ').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${name}|${date}|${subject}`;
+}
+
+function dedupeRows(rows) {
+  const seen = new Set();
+  const result = [];
+  let removed = 0;
+  for (const row of rows) {
+    const key = dedupeKey(row);
+    if (seen.has(key)) { removed++; continue; }
+    seen.add(key);
+    result.push(row);
+  }
+  return { rows: result, removed };
 }
 
 function setStatus(msg, isErr) {

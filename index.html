@@ -157,9 +157,9 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
     </div>
     <div id="uploadBody">
       <div class="dropzone" id="dropzone">
-        <p><strong>Sleep je Excel-bestand hierheen</strong> of klik om te bladeren</p>
+        <p><strong>Sleep je Excel-bestanden hierheen</strong> of klik om te bladeren (meerdere bestanden mogen)</p>
         <p class="fname" id="fname">Geen bestand gekozen</p>
-        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple hidden>
       </div>
       <div class="row">
         <button class="btn" id="filterBtn" disabled>Filteren</button>
@@ -211,6 +211,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609121317"></script>
+<script src="app.js?v=202609121353"></script>
 </body>
 </html>

@@ -166,6 +166,69 @@ const POTENTIAL_MIDPOINTS = {
 // grote gecombineerde datasets (meerdere Excel-bestanden).
 const BATCH_SIZE = 60;
 
+// Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
+// classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
+// (TOPIC_TAXONOMY, daar losstaand gedefinieerd want de Worker en de
+// frontend draaien apart; bij een wijziging hier dus ook worker.js
+// aanpassen). Gebaseerd op analyse van 6 maanden echte data (zie de
+// taxonomie-discussie): bezoekrapporten gaan overwegend over de
+// dealerrelatie (leads, prijs, marketing), met R&D-relevante
+// productsignalen als kleinere, verspreide minderheid — vandaar de
+// aparte domeinen i.p.v. alles even zwaar als "thema" te tonen.
+const TAXONOMY = {
+  product_techniek: {
+    label: 'Product & Techniek',
+    topics: {
+      onderdeel_defect: 'Onderdeel-/kwaliteitsprobleem',
+      bediening_domotica: 'Bediening/motorisatie/domotica',
+      kleur_afwerking: 'Kleur/afwerking',
+      maatvoering_beperking: 'Maatvoering/technische beperking',
+      feature_wens: 'Ontbrekende functionaliteit/productwens',
+    },
+  },
+  levering_logistiek: {
+    label: 'Levering & Logistiek',
+    topics: {
+      levertermijn: 'Levertermijn te lang',
+      foutieve_levering: 'Onvolledige/foutieve levering',
+      transportplanning: 'Transportplanning',
+    },
+  },
+  service_herstelling: {
+    label: 'Service & Herstelling',
+    topics: {
+      sav_opvolging: 'SAV-opvolging/reactietijd',
+      herstelling_garantie: 'Herstelling/garantie/creditnota',
+    },
+  },
+  prijs_concurrentie: {
+    label: 'Prijs & Concurrentiepositie',
+    topics: {
+      prijsvergelijking: 'Prijsvergelijking met concurrent',
+      marge_korting: 'Marge-/kortingsdiscussie',
+    },
+  },
+  tools_ondersteuning: {
+    label: 'Tools & Ondersteuning',
+    topics: {
+      wincal: 'Wincal/configurator',
+      opleiding_documentatie: 'Opleiding/documentatie/stalen',
+    },
+  },
+  commercieel: {
+    label: 'Commerciële dynamiek',
+    topics: {
+      leads_pipeline: 'Leads/pipeline-status',
+      marketing_acties: 'Marketingacties',
+      dealer_organisatie: 'Dealerorganisatie',
+    },
+  },
+};
+
+// Volgorde voor de per-categorie/globale weergave: R&D-relevante domeinen
+// eerst, commerciële ruis laatst (zie renderTopicDomains/renderResults).
+const DOMAIN_ORDER = Object.keys(TAXONOMY);
+
 let parsedRows = [];
 // Laatst opgebouwde aggregatie (met volledige rij-detail per klant) —
 // bewaard zodat de klik-op-klantnaam-popup (openCustomerModal) er nadien
@@ -616,21 +679,19 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
 // Voegt de analyses van meerdere batches van dezelfde categorie samen tot
 // één object met dezelfde vorm als een los batch-resultaat, zodat
 // buildGlobalOverview/renderResults ongewijzigd kunnen blijven. Lijstvelden
-// (themes, customer_sentiments, technical_issues, feature_requests,
-// barriers) worden geconcateneerd — gelijkaardige thema's uit verschillende
-// batches kunnen dus als aparte entries blijven staan i.p.v. samengevoegd
-// tot één thema (geen semantische deduplicatie tussen batches);
-// tekstvelden worden samengevoegd met joinText.
+// (customer_sentiments, topic_tags, barriers) worden geconcateneerd —
+// gelijkaardige topic_tags uit verschillende batches kunnen dus als
+// aparte entries blijven staan i.p.v. samengevoegd tot één groep (geen
+// semantische deduplicatie tussen batches); tekstvelden worden
+// samengevoegd met joinText.
 function mergeCategoryAnalyses(analyses) {
   const ec = analyses.map((a) => a.existing_customers || {});
   const pr = analyses.map((a) => a.prospecting || {});
   return {
     existing_customers: {
       general_impression: joinText(ec.map((e) => e.general_impression)),
-      themes: ec.flatMap((e) => e.themes || []),
       customer_sentiments: ec.flatMap((e) => e.customer_sentiments || []),
-      technical_issues: ec.flatMap((e) => e.technical_issues || []),
-      feature_requests: ec.flatMap((e) => e.feature_requests || []),
+      topic_tags: ec.flatMap((e) => e.topic_tags || []),
       benchmark_product: joinText(ec.map((e) => e.benchmark_product)),
       benchmark_price: joinText(ec.map((e) => e.benchmark_price)),
     },
@@ -796,11 +857,12 @@ function renderResults(agg, aiCategories, globalOverview) {
         </div>
         ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten', cat, 'existing')}
         <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
-        ${renderThemes(existingAi.themes, cat, 'existing')}
-        <h2 class="part-title" style="margin-top:18px;">Technische meldingen</h2>
-        ${renderIssueGroups(existingAi.technical_issues, 'issue', 'probleem', cat, 'existing')}
-        <h2 class="part-title" style="margin-top:18px;">Gewenste features</h2>
-        ${renderIssueGroups(existingAi.feature_requests, 'request', 'wens', cat, 'existing')}
+        <h2 class="part-title" style="margin-top:18px;">Signalen voor R&amp;D &amp; Product Management</h2>
+        ${renderTopicDomains(existingAi.topic_tags, cat, 'existing', ['product_techniek', 'levering_logistiek', 'service_herstelling'])}
+        <details class="theme-details" style="margin-top:8px;">
+          <summary><span class="theme-label">Tools, ondersteuning &amp; commerciële context (achtergrond, geen roadmap-signaal)</span></summary>
+          ${renderTopicDomains(existingAi.topic_tags, cat, 'existing', ['tools_ondersteuning', 'commercieel'])}
+        </details>
         <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
         <p class="narrative">${escapeHtml(existingAi.benchmark_product || '—')}</p>
         <h2 class="part-title" style="margin-top:18px;">Benchmark prijs</h2>
@@ -848,6 +910,14 @@ function escapeAttr(str) {
  * t.o.v. totalCustomers) laat toe om een score met weinig onderliggende
  * data zichtbaar te markeren i.p.v. hem even stellig te tonen.
  */
+// Roadmap-relevante domeinen: hierop zijn de cross-categorie Sterke
+// punten/Werkpunten-kaarten gebaseerd (zie renderGlobalSection). "Prijs &
+// Concurrentiepositie" krijgt een eigen kaart (topCompetitors); "Tools &
+// Ondersteuning" en "Commerciële dynamiek" blijven bewust weg uit dit
+// cross-categorie overzicht (geen roadmap-signaal) — ze zijn wel te zien
+// in de per-categorie taxonomie-weergave (renderTopicDomains).
+const ROADMAP_DOMAINS = ['product_techniek', 'levering_logistiek', 'service_herstelling'];
+
 function buildGlobalOverview(agg, aiCategories) {
   const cats = Object.keys(CATEGORY_LABELS);
   const perCategory = [];
@@ -856,6 +926,7 @@ function buildGlobalOverview(agg, aiCategories) {
   const allPositive = [];
   const allBarriers = [];
   const benchmarks = [];
+  const competitorCustomers = new Map(); // concurrent-naam -> Set(klanten)
   let totalPotential = 0;
   let totalProspects = 0;
 
@@ -865,48 +936,35 @@ function buildGlobalOverview(agg, aiCategories) {
     const ai = (aiCategories && aiCategories[cat]) || {};
     const existingAi = ai.existing_customers || {};
     const prospAi = ai.prospecting || {};
-    const themes = existingAi.themes || [];
+    const tags = existingAi.topic_tags || [];
     const sentiments = existingAi.customer_sentiments || [];
 
-    // Score-berekening: gebaseerd op "customer_sentiments" (verplichte,
-    // uitputtende per-opmerking classificatie uit worker.js), NIET op
-    // "themes". Themes blijven behouden voor de tekstuele Sterke
-    // punten/Werkpunten-kaarten hieronder, maar de score zelf hangt zo niet
-    // meer af van hoeveel thema's de AI toevallig vormt — dat was precies
-    // de bron van instabiliteit tussen identieke runs (zie consistentietest).
+    // Score-berekening: ongewijzigd gebaseerd op "customer_sentiments"
+    // (verplichte, uitputtende per-opmerking classificatie uit worker.js)
+    // — dat was precies de fix voor de instabiliteit tussen identieke runs
+    // (zie consistentietest), en blijft los staan van de topic_tags-
+    // taxonomie hieronder (die is voor de Sterke punten/Werkpunten-kaarten
+    // en de per-categorie weergave, niet voor de score zelf).
     const posSet = new Set();
     const negSet = new Set();
     const anySet = new Set();
-
-    if (sentiments.length) {
-      const byCustomer = new Map();
-      for (const s of sentiments) {
-        if (!s || !s.customer) continue;
-        if (!byCustomer.has(s.customer)) byCustomer.set(s.customer, []);
-        byCustomer.get(s.customer).push(s.sentiment);
-      }
-      for (const [customer, list] of byCustomer) {
-        // Bij meerdere opmerkingen van dezelfde klant telt het meest
-        // kritische signaal: negatief > positief > neutraal > geen mening.
-        let resolved = 'no_opinion';
-        if (list.includes('negative')) resolved = 'negative';
-        else if (list.includes('positive')) resolved = 'positive';
-        else if (list.includes('neutral')) resolved = 'neutral';
-        if (resolved === 'no_opinion') continue;
-        anySet.add(customer);
-        if (resolved === 'negative') negSet.add(customer);
-        if (resolved === 'positive') posSet.add(customer);
-      }
-    } else {
-      // Terugvalscenario (bv. een ouder/onvolledig AI-antwoord zonder
-      // customer_sentiments): reken zoals voorheen op basis van themes.
-      for (const t of themes) {
-        for (const n of (t.customers || [])) {
-          anySet.add(n);
-          if (t.sentiment === 'positive') posSet.add(n);
-          if (t.sentiment === 'negative') negSet.add(n);
-        }
-      }
+    const byCustomer = new Map();
+    for (const s of sentiments) {
+      if (!s || !s.customer) continue;
+      if (!byCustomer.has(s.customer)) byCustomer.set(s.customer, []);
+      byCustomer.get(s.customer).push(s.sentiment);
+    }
+    for (const [customer, list] of byCustomer) {
+      // Bij meerdere opmerkingen van dezelfde klant telt het meest
+      // kritische signaal: negatief > positief > neutraal > geen mening.
+      let resolved = 'no_opinion';
+      if (list.includes('negative')) resolved = 'negative';
+      else if (list.includes('positive')) resolved = 'positive';
+      else if (list.includes('neutral')) resolved = 'neutral';
+      if (resolved === 'no_opinion') continue;
+      anySet.add(customer);
+      if (resolved === 'negative') negSet.add(customer);
+      if (resolved === 'positive') posSet.add(customer);
     }
 
     const sampleSize = anySet.size;
@@ -915,15 +973,44 @@ function buildGlobalOverview(agg, aiCategories) {
 
     perCategory.push({ cat, label, score, sampleSize, totalCustomers });
 
-    for (const t of themes) {
-      if (t.sentiment === 'positive') allPositive.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    // Groepeer topic_tags per domein+onderwerp (binnen deze categorie) om
+    // per onderwerp het aantal unieke klanten met een positieve/negatieve
+    // vermelding te tellen — dezelfde "unieke klanten, niet aantal tags"-
+    // logica als bij de score hierboven, zodat 1 spraakzame klant ook hier
+    // niet doorweegt.
+    const byTopic = new Map();
+    for (const t of tags) {
+      if (!t || !t.domain || !t.topic) continue;
+      const key = `${t.domain}|${t.topic}`;
+      if (!byTopic.has(key)) {
+        byTopic.set(key, { domain: t.domain, topic: t.topic, posCustomers: new Set(), negCustomers: new Set() });
+      }
+      const b = byTopic.get(key);
+      if (t.customer && t.sentiment === 'positive') b.posCustomers.add(t.customer);
+      if (t.customer && t.sentiment === 'negative') b.negCustomers.add(t.customer);
+
+      if (t.domain === 'prijs_concurrentie' && t.topic === 'prijsvergelijking' && t.competitor) {
+        const comp = t.competitor.trim();
+        if (comp) {
+          if (!competitorCustomers.has(comp)) competitorCustomers.set(comp, new Set());
+          if (t.customer) competitorCustomers.get(comp).add(t.customer);
+        }
+      }
     }
-    for (const t of (existingAi.technical_issues || [])) {
-      allIssues.push({ cat, label, text: t.label, count: (t.customers || []).length });
+
+    for (const { domain, topic, posCustomers, negCustomers } of byTopic.values()) {
+      const topicLabel = (TAXONOMY[domain] && TAXONOMY[domain].topics[topic]) || topic;
+      if (domain === 'product_techniek' && topic === 'feature_wens') {
+        if (posCustomers.size || negCustomers.size) {
+          allWishes.push({ cat, label, text: topicLabel, count: posCustomers.size + negCustomers.size });
+        }
+        continue;
+      }
+      if (!ROADMAP_DOMAINS.includes(domain)) continue;
+      if (negCustomers.size) allIssues.push({ cat, label, text: topicLabel, count: negCustomers.size });
+      if (posCustomers.size) allPositive.push({ cat, label, text: topicLabel, count: posCustomers.size });
     }
-    for (const t of (existingAi.feature_requests || [])) {
-      allWishes.push({ cat, label, text: t.label, count: (t.customers || []).length });
-    }
+
     for (const t of (prospAi.barriers || [])) {
       allBarriers.push({ cat, label, text: t.label, count: (t.customers || []).length });
     }
@@ -942,12 +1029,18 @@ function buildGlobalOverview(agg, aiCategories) {
   allPositive.sort(byCountDesc);
   allBarriers.sort(byCountDesc);
 
+  const topCompetitors = [...competitorCustomers.entries()]
+    .map(([name, set]) => ({ name, count: set.size }))
+    .sort(byCountDesc)
+    .slice(0, 8);
+
   return {
     perCategory,
     topIssues: allIssues.slice(0, 8),
     topWishes: allWishes.slice(0, 8),
     topPositive: allPositive.slice(0, 8),
     topBarriers: allBarriers.slice(0, 8),
+    topCompetitors,
     totalPotential,
     totalProspects,
     benchmarks,
@@ -1008,14 +1101,25 @@ function renderGlobalSection(overview) {
     </div>
     <div class="card">
       <h2 class="part-title">Sterke punten</h2>
-      <p class="part-sub">Meest gedragen positieve thema's, over alle categorieën heen.</p>
-      ${rankedList(overview.topPositive, 'positive', 'positief', "Geen uitgesproken positieve thema's.")}
+      <p class="part-sub">Meest gedragen positieve signalen binnen Product &amp; Techniek / Levering &amp; Logistiek / Service &amp; Herstelling, over alle categorieën heen.</p>
+      ${rankedList(overview.topPositive, 'positive', 'positief', 'Geen uitgesproken positieve signalen.')}
     </div>
     <div class="card">
       <h2 class="part-title">Werkpunten</h2>
-      <p class="part-sub">Technische meldingen en gewenste features, over alle categorieën heen, gesorteerd op aantal klanten.</p>
-      ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische meldingen gerapporteerd.')}
+      <p class="part-sub">Product-, leverings- en servicesignalen met minstens één negatieve melding, en gewenste features — over alle categorieën heen, gesorteerd op aantal klanten. Dit is het R&amp;D/Product Management-relevante deel van de taxonomie.</p>
+      ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische/logistieke/service-meldingen gerapporteerd.')}
       ${rankedList(overview.topWishes, 'request', 'wens', 'Geen gewenste features gerapporteerd.')}
+    </div>
+    <div class="card">
+      <h2 class="part-title">Concurrentiepositie</h2>
+      <p class="part-sub">Meest vermelde concurrenten bij prijsvergelijkingen door bestaande klanten (taxonomie-domein "Prijs &amp; Concurrentiepositie"), over alle categorieën heen — apart van de productsignalen hierboven.</p>
+      ${overview.topCompetitors && overview.topCompetitors.length
+        ? overview.topCompetitors.map((c) => `
+          <div class="ranked-row">
+            <span class="ranked-text">${escapeHtml(c.name)}</span>
+            <span class="count-badge">${c.count}</span>
+          </div>`).join('')
+        : '<p class="narrative">Geen concurrenten expliciet vermeld bij prijsvergelijkingen.</p>'}
     </div>
     <div class="card">
       <h2 class="part-title">Prospecting — totaal</h2>
@@ -1119,15 +1223,80 @@ function renderThemes(themes, cat, part) {
   }).join('');
 }
 
-// Technische meldingen / gewenste features: zelfde uitklap-opmaak als
-// renderThemes, maar met een vast badge-label i.p.v. sentiment (positief/
-// negatief zegt hier niets — het gaat om "is dit gemeld", niet om toon).
-function renderIssueGroups(items, badgeClass, badgeText, cat, part) {
-  if (!items || !items.length) return '<p class="narrative">Geen gemeld.</p>';
-  return items.map((t) => {
-    const names = t.customers || [];
-    return renderDetailsBlock(t.label, names, `<span class="pill ${badgeClass}">${badgeText}</span>`, cat, part);
-  }).join('');
+// Groepeert topic_tags (van één categorie/part) per domein+onderwerp —
+// bron voor zowel de per-categorie taxonomie-weergave (renderTopicDomains)
+// als de cross-categorie tellingen in buildGlobalOverview.
+function groupTopicTags(tags) {
+  const domains = {};
+  for (const t of (tags || [])) {
+    if (!t || !t.domain || !t.topic) continue;
+    if (!domains[t.domain]) domains[t.domain] = {};
+    if (!domains[t.domain][t.topic]) domains[t.domain][t.topic] = { customers: new Set(), entries: [] };
+    const bucket = domains[t.domain][t.topic];
+    if (t.customer) bucket.customers.add(t.customer);
+    bucket.entries.push(t);
+  }
+  return domains;
+}
+
+// Overheersend sentiment binnen een topic-groep (voor de badge) — negatief
+// weegt door zodra er minstens één negatieve tag is, net als bij de
+// customer_sentiments-score (het meest kritische signaal telt).
+function dominantSentiment(entries) {
+  const counts = { negative: 0, positive: 0, neutral: 0 };
+  for (const e of entries) {
+    if (counts[e.sentiment] !== undefined) counts[e.sentiment]++;
+  }
+  if (counts.negative > 0) return 'negative';
+  if (counts.positive > 0) return 'positive';
+  return 'neutral';
+}
+
+// Eén uitklapbaar blokje per onderwerp: klantnamen (klikbaar, zie
+// renderDetailsBlock) plus een paar concrete voorbeeld-citaten (het
+// "detail"-veld per tag) — dat laatste is net wat een vaste taxonomie
+// zonder kleur zou missen: telbaar ÉN nog steeds herkenbaar per geval.
+function renderTopicBlock(topicLabel, bucket, cat, part) {
+  const names = [...bucket.customers];
+  const sentiment = dominantSentiment(bucket.entries);
+  const details = [...new Set(bucket.entries.map((e) => e.detail).filter(Boolean))].slice(0, 3);
+  const detailsHtml = details.length
+    ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
+    : '';
+  const inner = `
+    ${detailsHtml}
+    ${names.length ? `<div class="customer-list">${names.map((n) => `<div>${customerLinkHtml(n, cat, part)}</div>`).join('')}</div>` : ''}
+  `;
+  return `
+    <details class="theme-details">
+      <summary>
+        <span class="theme-label">${escapeHtml(topicLabel)}</span>
+        <span class="theme-badges"><span class="pill ${sentiment}">${sentiment}</span> <span class="count-badge">${names.length}</span></span>
+      </summary>
+      ${inner}
+    </details>
+  `;
+}
+
+// Rendert een of meerdere domeinen uit de taxonomie (zie TAXONOMY/
+// DOMAIN_ORDER hierboven) voor de gegeven topic_tags — elk aanwezig domein
+// krijgt een eigen kopje, elk onderwerp daarbinnen een eigen uitklapblok,
+// gesorteerd op aantal unieke klanten (grootste patroon eerst).
+function renderTopicDomains(tags, cat, part, domainKeys) {
+  const grouped = groupTopicTags(tags);
+  const keys = domainKeys || DOMAIN_ORDER;
+  const blocks = [];
+  for (const domainKey of keys) {
+    const topics = grouped[domainKey];
+    if (!topics) continue;
+    const domainLabel = TAXONOMY[domainKey].label;
+    const topicKeys = Object.keys(topics).sort((a, b) => topics[b].customers.size - topics[a].customers.size);
+    const topicBlocks = topicKeys
+      .map((topicKey) => renderTopicBlock(TAXONOMY[domainKey].topics[topicKey] || topicKey, topics[topicKey], cat, part))
+      .join('');
+    blocks.push(`<h2 class="part-title" style="margin-top:18px;">${escapeHtml(domainLabel)}</h2>${topicBlocks}`);
+  }
+  return blocks.join('') || '<p class="narrative">Geen classificeerbare signalen.</p>';
 }
 
 function truncate(str, n) {

@@ -18,15 +18,77 @@
 // categorie gaat.
 //
 // Claude krijgt per klant-opmerking ook de klantnaam mee, en moet in zijn
-// thema's/meldingen/wensen/drempels exact diezelfde namen citeren (i.p.v.
-// enkel een cijfer op te geven) — zo blijft "hoeveel klanten" herleidbaar
-// tot wélke klanten, in plaats van een verzonnen telling.
+// tags/drempels exact diezelfde namen citeren (i.p.v. enkel een cijfer op
+// te geven) — zo blijft "hoeveel klanten" herleidbaar tot wélke klanten, in
+// plaats van een verzonnen telling.
 //
-// Voor "Deel 1 — Bestaande klanten" wordt de input in drie aparte groepen
-// gesplitst (themes / technical_issues / feature_requests) i.p.v. één
-// algemene lijst — dat is precies de indeling die bruikbaar is als input
-// voor een R&D/PM-roadmap: sentiment apart van concrete defecten, en
-// defecten apart van functiewensen.
+// VASTE TAXONOMIE i.p.v. vrije "themes" (sinds de taxonomie-herbouw): in
+// plaats van zelf thema's/technische meldingen/features te laten verzinnen
+// (wat als losse, niet-optelbare opsomming aanvoelde bij grotere datasets),
+// classificeert Claude elke opmerking met vaste domein+onderwerp-tags uit
+// TOPIC_TAXONOMY hieronder. Dat maakt de output telbaar en vergelijkbaar
+// over categorieën én maanden heen (zie app.js: groupTopicTags/
+// buildGlobalOverview), en scheidt meteen R&D-relevante productsignalen
+// van de veel talrijkere commerciële/dealerrelatie-inhoud die in de
+// bezoekrapporten overheerst (bevestigd bij analyse van 6 maanden data).
+
+// Bron van waarheid voor de vaste taxonomie — ook gebruikt in app.js
+// (TAXONOMY, daar losstaand gedefinieerd want de Worker en de frontend
+// draaien apart; bij een wijziging hier dus ook app.js aanpassen).
+const TOPIC_TAXONOMY = {
+  product_techniek: {
+    label: 'Product & Techniek',
+    note: 'dit is de kern voor R&D',
+    topics: {
+      onderdeel_defect: 'defect, kapot, kras, put, lek, storing aan een onderdeel of product.',
+      bediening_domotica: 'motor, afstandsbediening, app, domotica, bediening.',
+      kleur_afwerking: 'kleur, RAL, afwerking, coating.',
+      maatvoering_beperking: 'afmetingen, technische/constructieve beperking.',
+      feature_wens: 'functionaliteit of optie die de klant expliciet mist of wenst (input voor productroadmap).',
+    },
+  },
+  levering_logistiek: {
+    label: 'Levering & Logistiek',
+    topics: {
+      levertermijn: 'levertermijn/doorlooptijd te lang of vertraging.',
+      foutieve_levering: 'onvolledige, foutieve of beschadigde levering.',
+      transportplanning: 'planning/organisatie van transport/levering.',
+    },
+  },
+  service_herstelling: {
+    label: 'Service & Herstelling',
+    topics: {
+      sav_opvolging: 'opvolging van klachten, reactietijd van de dienst na verkoop.',
+      herstelling_garantie: 'herstelling, garantie, creditnota voor een probleem.',
+    },
+  },
+  prijs_concurrentie: {
+    label: 'Prijs & Concurrentiepositie',
+    topics: {
+      prijsvergelijking: 'klant vergelijkt prijs/aanbod met een specifieke concurrent (vermeld de concurrent-naam in "competitor" indien genoemd).',
+      marge_korting: 'marge- of kortingsdiscussie tussen Winsol en de dealer.',
+    },
+  },
+  tools_ondersteuning: {
+    label: 'Tools & Ondersteuning',
+    topics: {
+      wincal: 'het configuratie-/bestelprogramma Wincal.',
+      opleiding_documentatie: 'opleiding, documentatie, stalen, folders.',
+    },
+  },
+  commercieel: {
+    label: 'Commerciële dynamiek',
+    note: 'géén roadmap-signaal, wel context',
+    topics: {
+      leads_pipeline: 'leads, pipeline, omzet, bestelvolume.',
+      marketing_acties: 'marketingacties, beurzen, foldercampagnes, website.',
+      dealer_organisatie: 'interne organisatie van de dealer (zaakvoerderswissel, personeel, showroom).',
+    },
+  },
+};
+
+const DOMAIN_KEYS = Object.keys(TOPIC_TAXONOMY);
+const TOPIC_KEYS = DOMAIN_KEYS.flatMap((d) => Object.keys(TOPIC_TAXONOMY[d].topics));
 
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
@@ -38,23 +100,6 @@ const ANALYSIS_TOOL = {
         type: 'object',
         properties: {
           general_impression: { type: 'string', description: 'Narrative summary (NL) of how existing customers experience the product, positive and negative.' },
-          themes: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                label: { type: 'string' },
-                sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral'] },
-                customers: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description: 'Exact customer names (copied verbatim from the provided remarks) whose remark reflects this viewpoint.',
-                },
-              },
-              required: ['label', 'sentiment', 'customers'],
-            },
-            description: 'General voice-of-customer sentiment/experience themes (satisfaction, impression, service, ...). Not technical defects and not feature requests — those go in the separate fields below.',
-          },
           customer_sentiments: {
             type: 'array',
             items: {
@@ -66,44 +111,29 @@ const ANALYSIS_TOOL = {
               },
               required: ['id', 'customer', 'sentiment'],
             },
-            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit — niet "themes" — is de basis voor de score-berekening in de tool; "themes" blijft apart voor de tekstuele samenvatting.',
+            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit is de basis voor de score-berekening in de tool.',
           },
-          technical_issues: {
+          topic_tags: {
             type: 'array',
             items: {
               type: 'object',
               properties: {
-                label: { type: 'string', description: 'Concrete technical problem/defect/complaint, e.g. "motor defect na installatie".' },
-                customers: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description: 'Exact customer names (copied verbatim) reporting this issue.',
-                },
+                id: { type: 'string', description: 'Het opmerking-id (zie customer_sentiments), bv. "R3".' },
+                customer: { type: 'string', description: 'Exacte klantnaam (letterlijk overgenomen) bij dit id.' },
+                domain: { type: 'string', enum: DOMAIN_KEYS, description: 'Vast domein uit de taxonomie — zie prompt.' },
+                topic: { type: 'string', enum: TOPIC_KEYS, description: 'Vast onderwerp uit de taxonomie — zie prompt.' },
+                sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral'], description: 'Sentiment t.o.v. dit specifieke onderwerp (niet de klant in het algemeen).' },
+                detail: { type: 'string', description: 'Korte, concrete beschrijving (max. 1 zin) van wat deze opmerking hierover zegt — geen vage samenvatting.' },
+                competitor: { type: 'string', description: 'Enkel bij topic "prijsvergelijking": naam van de vermelde concurrent. Leeg laten indien niet van toepassing of niet genoemd.' },
               },
-              required: ['label', 'customers'],
+              required: ['id', 'customer', 'domain', 'topic', 'sentiment', 'detail'],
             },
-            description: 'Concrete technical problems, defects, quality or installation/service complaints — grouped by topic. Empty array if none reported. This is the primary input for R&D quality follow-up.',
-          },
-          feature_requests: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                label: { type: 'string', description: 'Functionality/option the customer misses or explicitly wants, e.g. "gemotoriseerde bediening via app".' },
-                customers: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description: 'Exact customer names (copied verbatim) who mentioned this.',
-                },
-              },
-              required: ['label', 'customers'],
-            },
-            description: 'Missing functionality or explicitly wished-for features/options — grouped by topic. Empty array if none reported. This is the primary input for product roadmap prioritisation.',
+            description: 'Vaste domein/onderwerp-classificatie per opmerking (zie taxonomie in de prompt) — dit vervangt vrije "themes": elke opmerking met classificeerbare inhoud krijgt hier één of meer tags (0 tags toegestaan voor zuiver administratieve opmerkingen zonder enig classificeerbaar aspect).',
           },
           benchmark_product: { type: 'string', description: 'What customers say about specs/offering vs competitors.' },
           benchmark_price: { type: 'string', description: 'What customers say about pricing vs competitors.' },
         },
-        required: ['general_impression', 'themes', 'customer_sentiments', 'technical_issues', 'feature_requests', 'benchmark_product', 'benchmark_price'],
+        required: ['general_impression', 'customer_sentiments', 'topic_tags', 'benchmark_product', 'benchmark_price'],
       },
       prospecting: {
         type: 'object',
@@ -220,7 +250,9 @@ export default {
       // verstuurd opmerking-id te krijgen (zie formatRemarksWithIds hieronder).
       // Een tekort blokkeert de analyse niet — een onvolledig antwoord is nog
       // altijd bruikbaarder dan geen antwoord — maar wordt gelogd zodat het
-      // zichtbaar is in de Worker-logs (wrangler tail).
+      // zichtbaar is in de Worker-logs (wrangler tail). topic_tags is bewust
+      // NIET exhaustief (zuiver administratieve opmerkingen mogen 0 tags
+      // krijgen), dus daar geldt geen gelijkaardige check.
       const gotIds = new Set((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => s.id));
       const missingIds = existingFmt.ids.filter((id) => !gotIds.has(id));
       if (missingIds.length) {
@@ -233,21 +265,36 @@ export default {
   },
 };
 
+// Bouwt het taxonomie-blok van de prompt uit TOPIC_TAXONOMY zelf (i.p.v.
+// het hardcoded uit te schrijven) — zo kan de lijst hierboven uitgebreid
+// worden zonder de prompttekst apart te moeten bijwerken.
+function buildTaxonomyBlock() {
+  const lines = ['Gebruik UITSLUITEND onderstaande domein/onderwerp-combinaties (geen eigen varianten, geen nieuwe onderwerpen verzinnen):', ''];
+  for (const domainKey of DOMAIN_KEYS) {
+    const d = TOPIC_TAXONOMY[domainKey];
+    lines.push(`Domein "${domainKey}" (${d.label}${d.note ? ' — ' + d.note : ''}):`);
+    for (const topicKey of Object.keys(d.topics)) {
+      lines.push(`  - "${topicKey}": ${d.topics[topicKey]}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function buildPrompt(category, existingText, existingIds, prospectingText, potentialSum) {
   return [
     `Je analyseert feedback van sales-bezoekrapporten voor Winsol, specifiek voor de productcategorie "${category}" (zonwering/schrijnwerk).`,
-    `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen thema, probleem, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
-    'Geef een genuanceerde, feitelijke synthese in het Nederlands. Verdeel de input voor bestaande klanten in drie aparte groepen (een opmerking mag in meerdere groepen terugkomen als ze meerdere aspecten bevat):',
-    '1. "themes" — algemene ervaring/sentiment (tevredenheid, indruk, service in het algemeen, ...).',
-    '2. "technical_issues" — concrete technische problemen, defecten, klachten over werking, kwaliteit, montage of service. Dit is input voor R&D-kwaliteitsopvolging.',
-    '3. "feature_requests" — functionaliteit of opties die de klant mist of expliciet wenst. Dit is input voor de product-roadmap.',
-    'Geef voor "technical_issues" en "feature_requests" gewoon een lege lijst terug als die er niet zijn — verzin niets.',
-    'BELANGRIJK: bij elk thema/probleem/wens/drempel geef je een "customers"-lijst met de EXACTE klantnamen (letterlijk overgenomen, geen aanpassingen) van de klanten wiens opmerking dat standpunt weerspiegelt. Verzin geen klantnamen en verzin geen thema/probleem/wens zonder dat er minstens één klant met naam achter zit.',
-    'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
-    'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie (bv. "Bezoek", "Stalen afgegeven", "Offerte opgenomen") — daar valt geen thema uit te halen. Bouw thema\'s NIET door de opmerkingen van één en dezelfde klant meermaals te herformuleren tot ogenschijnlijk verschillende thema\'s: dat oogt als brede consensus terwijl het één mening is. Als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, beperk het aantal thema\'s daartoe en vermeld dat expliciet in "general_impression" (bv. "De meeste van de X rapporten zijn bezoeknotities zonder uitgesproken klantopinie; de feedback hieronder komt vrijwel volledig van klant Y."). Geef bij voorkeur, en enkel waar de data dat echt draagt, thema\'s die op verschillende klanten gebaseerd zijn.',
+    `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen tag, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
+    'Geef een genuanceerde, feitelijke synthese in het Nederlands.',
+    '',
+    '--- VASTE TAXONOMIE (topic_tags) ---',
+    'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
+    buildTaxonomyBlock(),
+    '',
+    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), de exacte klantnaam, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
+    'BELANGRIJK: verzin geen tag, klantnaam of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     '--- VERPLICHTE PER-OPMERKING CLASSIFICATIE (customer_sentiments) ---',
-    'Naast "themes" geef je ook een apart veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen.',
+    'Naast "topic_tags" geef je ook een apart veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen.',
     `De ids die je moet gebruiken zijn: ${existingIds.join(', ') || '(geen)'}.`,
     'Ken per id exact één sentiment toe uit: "positive", "negative", "neutral", "no_opinion" — met deze betekenis:',
     '- "positive": de klant uit expliciete tevredenheid, lof, of wil de samenwerking duidelijk voortzetten/uitbreiden (bv. "zeer tevreden over levering", "wil graag opnieuw bestellen").',
@@ -256,6 +303,9 @@ function buildPrompt(category, existingText, existingIds, prospectingText, poten
     '- "no_opinion": zuiver administratieve notitie zonder enig oordeel over product/dienst (bv. "bezoek afgelegd", "staal afgegeven", "offerte besproken", "nog niet opgestart").',
     'Bij twijfel: een opgeloste klacht zonder verdere negatieve toon → "neutral" (niet "negative"); een aanhoudende/onopgeloste klacht → "negative"; een zuiver informatieve/administratieve zin zonder klantoordeel → "no_opinion" (niet "neutral").',
     'Deze lijst bepaalt rechtstreeks de betrouwbaarheidsscore in de tool — sla dus geen enkel id over, ook niet wanneer het overduidelijk "no_opinion" is.',
+    '',
+    'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie — daar valt geen tag uit te halen. Groepeer een onderwerp NIET breder dan de data draagt: als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, benoem dat expliciet in "general_impression" (bv. "De meeste van de X rapporten zijn bezoeknotities zonder uitgesproken klantopinie; de feedback hieronder komt vrijwel volledig van klant Y.") in plaats van dat te laten lijken op een breed gedragen patroon.',
+    'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
     '',
     '--- BESTAANDE KLANTEN ---',
     existingText,
@@ -271,9 +321,10 @@ function formatRemarks(remarks) {
 }
 
 // Zoals formatRemarks, maar met een stabiel volgnummer (R1, R2, ...) per
-// opmerking — nodig zodat de AI in "customer_sentiments" exact kan
-// terugverwijzen naar welke opmerking ze classificeert, en zodat de Worker
-// achteraf kan controleren of alle ids ook echt een classificatie kregen.
+// opmerking — nodig zodat de AI in "customer_sentiments"/"topic_tags" exact
+// kan terugverwijzen naar welke opmerking ze classificeert, en zodat de
+// Worker achteraf kan controleren of alle ids ook echt een classificatie
+// kregen (customer_sentiments).
 function formatRemarksWithIds(remarks) {
   if (!remarks || !remarks.length) return { text: '(geen)', ids: [] };
   const ids = remarks.map((_, i) => `R${i + 1}`);

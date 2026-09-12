@@ -859,7 +859,7 @@ function renderResults(agg, aiCategories, globalOverview) {
         <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
         <h2 class="part-title" style="margin-top:18px;">Signalen voor R&amp;D &amp; Product Management</h2>
         ${renderTopicDomains(existingAi.topic_tags, cat, 'existing', ['product_techniek', 'levering_logistiek', 'service_herstelling'])}
-        <details class="theme-details" style="margin-top:8px;">
+        <details class="theme-details" style="margin-top:8px;" open>
           <summary><span class="theme-label">Tools, ondersteuning &amp; commerciële context (achtergrond, geen roadmap-signaal)</span></summary>
           ${renderTopicDomains(existingAi.topic_tags, cat, 'existing', ['tools_ondersteuning', 'commercieel'])}
         </details>

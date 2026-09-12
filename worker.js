@@ -55,6 +55,19 @@ const ANALYSIS_TOOL = {
             },
             description: 'General voice-of-customer sentiment/experience themes (satisfaction, impression, service, ...). Not technical defects and not feature requests — those go in the separate fields below.',
           },
+          customer_sentiments: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Het opmerking-id zoals meegegeven bij "BESTAANDE KLANTEN", bv. "R3".' },
+                customer: { type: 'string', description: 'Exacte klantnaam (letterlijk overgenomen) bij dit id.' },
+                sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral', 'no_opinion'], description: '"no_opinion" voor een loutere bezoeknotitie zonder uitgesproken oordeel.' },
+              },
+              required: ['id', 'customer', 'sentiment'],
+            },
+            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit — niet "themes" — is de basis voor de score-berekening in de tool; "themes" blijft apart voor de tekstuele samenvatting.',
+          },
           technical_issues: {
             type: 'array',
             items: {
@@ -90,7 +103,7 @@ const ANALYSIS_TOOL = {
           benchmark_product: { type: 'string', description: 'What customers say about specs/offering vs competitors.' },
           benchmark_price: { type: 'string', description: 'What customers say about pricing vs competitors.' },
         },
-        required: ['general_impression', 'themes', 'technical_issues', 'feature_requests', 'benchmark_product', 'benchmark_price'],
+        required: ['general_impression', 'themes', 'customer_sentiments', 'technical_issues', 'feature_requests', 'benchmark_product', 'benchmark_price'],
       },
       prospecting: {
         type: 'object',
@@ -170,7 +183,9 @@ export default {
     const category = body.category || 'onbekend';
     const existing = body.existing || { remarks: [] };
     const prospecting = body.prospecting || { remarks: [], potentialSum: 0 };
-    const prompt = buildPrompt(category, existing, prospecting);
+    const existingFmt = formatRemarksWithIds(existing.remarks);
+    const prospectingText = formatRemarks(prospecting.remarks);
+    const prompt = buildPrompt(category, existingFmt.text, existingFmt.ids, prospectingText, prospecting.potentialSum);
     const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
 
     try {
@@ -183,7 +198,8 @@ export default {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          max_tokens: 6000,
+          temperature: 0,
           tools: [ANALYSIS_TOOL],
           tool_choice: { type: 'tool', name: 'submit_analysis' },
           messages: [{ role: 'user', content: prompt }],
@@ -200,6 +216,16 @@ export default {
       if (!toolUse) {
         return jsonResponse({ error: 'Geen gestructureerd antwoord ontvangen van Claude.' }, 502);
       }
+      // Volledigheids-check: hoort exact één customer_sentiments-entry per
+      // verstuurd opmerking-id te krijgen (zie formatRemarksWithIds hieronder).
+      // Een tekort blokkeert de analyse niet — een onvolledig antwoord is nog
+      // altijd bruikbaarder dan geen antwoord — maar wordt gelogd zodat het
+      // zichtbaar is in de Worker-logs (wrangler tail).
+      const gotIds = new Set((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => s.id));
+      const missingIds = existingFmt.ids.filter((id) => !gotIds.has(id));
+      if (missingIds.length) {
+        console.warn(`[${category}] customer_sentiments mist ${missingIds.length}/${existingFmt.ids.length} id(s): ${missingIds.join(', ')}`);
+      }
       return jsonResponse({ category, analysis: toolUse.input });
     } catch (err) {
       return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
@@ -207,7 +233,7 @@ export default {
   },
 };
 
-function buildPrompt(category, existing, prospecting) {
+function buildPrompt(category, existingText, existingIds, prospectingText, potentialSum) {
   return [
     `Je analyseert feedback van sales-bezoekrapporten voor Winsol, specifiek voor de productcategorie "${category}" (zonwering/schrijnwerk).`,
     `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen thema, probleem, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
@@ -220,17 +246,39 @@ function buildPrompt(category, existing, prospecting) {
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
     'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie (bv. "Bezoek", "Stalen afgegeven", "Offerte opgenomen") — daar valt geen thema uit te halen. Bouw thema\'s NIET door de opmerkingen van één en dezelfde klant meermaals te herformuleren tot ogenschijnlijk verschillende thema\'s: dat oogt als brede consensus terwijl het één mening is. Als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, beperk het aantal thema\'s daartoe en vermeld dat expliciet in "general_impression" (bv. "De meeste van de X rapporten zijn bezoeknotities zonder uitgesproken klantopinie; de feedback hieronder komt vrijwel volledig van klant Y."). Geef bij voorkeur, en enkel waar de data dat echt draagt, thema\'s die op verschillende klanten gebaseerd zijn.',
     '',
-    '--- BESTAANDE KLANTEN ---',
-    formatRemarks(existing.remarks),
+    '--- VERPLICHTE PER-OPMERKING CLASSIFICATIE (customer_sentiments) ---',
+    'Naast "themes" geef je ook een apart veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen.',
+    `De ids die je moet gebruiken zijn: ${existingIds.join(', ') || '(geen)'}.`,
+    'Ken per id exact één sentiment toe uit: "positive", "negative", "neutral", "no_opinion" — met deze betekenis:',
+    '- "positive": de klant uit expliciete tevredenheid, lof, of wil de samenwerking duidelijk voortzetten/uitbreiden (bv. "zeer tevreden over levering", "wil graag opnieuw bestellen").',
+    '- "negative": de klant uit een klacht, probleem, ontevredenheid, of overweegt/wil van leverancier wisselen (bv. "motor defect", "ontevreden over service", "klant twijfelt door slechte ervaring").',
+    '- "neutral": een gemengd of louter feitelijk oordeel zonder duidelijke uitslag naar tevreden of ontevreden (bv. prijs/product vergeleken zonder waardeoordeel).',
+    '- "no_opinion": zuiver administratieve notitie zonder enig oordeel over product/dienst (bv. "bezoek afgelegd", "staal afgegeven", "offerte besproken", "nog niet opgestart").',
+    'Bij twijfel: een opgeloste klacht zonder verdere negatieve toon → "neutral" (niet "negative"); een aanhoudende/onopgeloste klacht → "negative"; een zuiver informatieve/administratieve zin zonder klantoordeel → "no_opinion" (niet "neutral").',
+    'Deze lijst bepaalt rechtstreeks de betrouwbaarheidsscore in de tool — sla dus geen enkel id over, ook niet wanneer het overduidelijk "no_opinion" is.',
     '',
-    `--- PROSPECTS (geschat totaal potentieel €${Math.round(prospecting.potentialSum || 0)}) ---`,
-    formatRemarks(prospecting.remarks),
+    '--- BESTAANDE KLANTEN ---',
+    existingText,
+    '',
+    `--- PROSPECTS (geschat totaal potentieel €${Math.round(potentialSum || 0)}) ---`,
+    prospectingText,
   ].join('\n');
 }
 
 function formatRemarks(remarks) {
   if (!remarks || !remarks.length) return '(geen)';
   return remarks.map((r) => `- [${r.name}] ${r.remark}`).join('\n');
+}
+
+// Zoals formatRemarks, maar met een stabiel volgnummer (R1, R2, ...) per
+// opmerking — nodig zodat de AI in "customer_sentiments" exact kan
+// terugverwijzen naar welke opmerking ze classificeert, en zodat de Worker
+// achteraf kan controleren of alle ids ook echt een classificatie kregen.
+function formatRemarksWithIds(remarks) {
+  if (!remarks || !remarks.length) return { text: '(geen)', ids: [] };
+  const ids = remarks.map((_, i) => `R${i + 1}`);
+  const text = remarks.map((r, i) => `- [${ids[i]}] [${r.name}] ${r.remark}`).join('\n');
+  return { text, ids };
 }
 
 async function handleGlobalSummary(body, env) {
@@ -249,6 +297,7 @@ async function handleGlobalSummary(body, env) {
       body: JSON.stringify({
         model,
         max_tokens: 1024,
+        temperature: 0,
         tools: [GLOBAL_SUMMARY_TOOL],
         tool_choice: { type: 'tool', name: 'submit_global_summary' },
         messages: [{ role: 'user', content: prompt }],

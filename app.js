@@ -682,17 +682,49 @@ function buildGlobalOverview(agg, aiCategories) {
     const existingAi = ai.existing_customers || {};
     const prospAi = ai.prospecting || {};
     const themes = existingAi.themes || [];
+    const sentiments = existingAi.customer_sentiments || [];
 
+    // Score-berekening: gebaseerd op "customer_sentiments" (verplichte,
+    // uitputtende per-opmerking classificatie uit worker.js), NIET op
+    // "themes". Themes blijven behouden voor de tekstuele Sterke
+    // punten/Werkpunten-kaarten hieronder, maar de score zelf hangt zo niet
+    // meer af van hoeveel thema's de AI toevallig vormt — dat was precies
+    // de bron van instabiliteit tussen identieke runs (zie consistentietest).
     const posSet = new Set();
     const negSet = new Set();
     const anySet = new Set();
-    for (const t of themes) {
-      for (const n of (t.customers || [])) {
-        anySet.add(n);
-        if (t.sentiment === 'positive') posSet.add(n);
-        if (t.sentiment === 'negative') negSet.add(n);
+
+    if (sentiments.length) {
+      const byCustomer = new Map();
+      for (const s of sentiments) {
+        if (!s || !s.customer) continue;
+        if (!byCustomer.has(s.customer)) byCustomer.set(s.customer, []);
+        byCustomer.get(s.customer).push(s.sentiment);
+      }
+      for (const [customer, list] of byCustomer) {
+        // Bij meerdere opmerkingen van dezelfde klant telt het meest
+        // kritische signaal: negatief > positief > neutraal > geen mening.
+        let resolved = 'no_opinion';
+        if (list.includes('negative')) resolved = 'negative';
+        else if (list.includes('positive')) resolved = 'positive';
+        else if (list.includes('neutral')) resolved = 'neutral';
+        if (resolved === 'no_opinion') continue;
+        anySet.add(customer);
+        if (resolved === 'negative') negSet.add(customer);
+        if (resolved === 'positive') posSet.add(customer);
+      }
+    } else {
+      // Terugvalscenario (bv. een ouder/onvolledig AI-antwoord zonder
+      // customer_sentiments): reken zoals voorheen op basis van themes.
+      for (const t of themes) {
+        for (const n of (t.customers || [])) {
+          anySet.add(n);
+          if (t.sentiment === 'positive') posSet.add(n);
+          if (t.sentiment === 'negative') negSet.add(n);
+        }
       }
     }
+
     const sampleSize = anySet.size;
     const totalCustomers = stats.existing.customers.length;
     const score = sampleSize ? (posSet.size - negSet.size) / sampleSize : null;

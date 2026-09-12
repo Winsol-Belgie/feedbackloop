@@ -1255,14 +1255,26 @@ function dominantSentiment(entries) {
 function renderTopicBlock(topicLabel, bucket, cat, part) {
   const names = [...bucket.customers];
   const sentiment = dominantSentiment(bucket.entries);
-  const details = [...new Set(bucket.entries.map((e) => e.detail).filter(Boolean))].slice(0, 3);
-  const detailsHtml = details.length
-    ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
-    : '';
-  const inner = `
-    ${detailsHtml}
-    ${names.length ? `<div class="customer-list">${names.map((n) => `<div>${customerLinkHtml(n, cat, part)}</div>`).join('')}</div>` : ''}
-  `;
+  // Voorbeeld-teksten ("detail") horen bij één specifieke klant (zelfde
+  // topic_tag-entry) — koppel ze daarom aan die klant i.p.v. los boven de
+  // klantenlijst te tonen. Per klant max. 2 unieke voorbeelden.
+  const detailsByCustomer = new Map();
+  for (const e of bucket.entries) {
+    if (!e.customer || !e.detail) continue;
+    if (!detailsByCustomer.has(e.customer)) detailsByCustomer.set(e.customer, []);
+    const list = detailsByCustomer.get(e.customer);
+    if (!list.includes(e.detail)) list.push(e.detail);
+  }
+  const customerItems = names
+    .map((n) => {
+      const details = (detailsByCustomer.get(n) || []).slice(0, 2);
+      const detailsHtml = details.length
+        ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
+        : '';
+      return `<div>${customerLinkHtml(n, cat, part)}${detailsHtml}</div>`;
+    })
+    .join('');
+  const inner = customerItems ? `<div class="customer-list">${customerItems}</div>` : '';
   return `
     <details class="theme-details">
       <summary>

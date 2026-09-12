@@ -268,6 +268,8 @@ async function handleFiles(fileList) {
   const bronNote = ok.length === 1 ? `"${ok[0].sheetName}"` : `${ok.length} bestanden`;
   let msg = `${combined.length} rijen ingelezen uit ${bronNote}`;
   if (removed) msg += `, ${removed} dubbele rapporten (klant + datum + onderwerp) verwijderd → ${parsedRows.length} rijen over`;
+  const period = reportPeriodLabel(parsedRows);
+  if (period) msg += ` — periode: ${period}`;
   msg += failed.length ? `. Mislukt: ${failed.join('; ')}.` : '. Klik op "Filteren" om verder te gaan.';
   setStatus(msg, failed.length > 0);
   filterBtn.disabled = parsedRows.length === 0;
@@ -356,6 +358,38 @@ function dedupeRows(rows) {
     result.push(row);
   }
   return { rows: result, removed };
+}
+
+// De datumkolom (C) in de export bevat geen jaartal (bv. "Thu 10-09" =
+// 10 september) — op vraag van Gwenn wordt daarvoor gewoon het huidige
+// kalenderjaar genomen. Enkel voor de periode-melding bij het inlezen;
+// de datumkolom zelf wordt nergens anders herrekend of gebruikt.
+function parseReportDate(str) {
+  if (!str) return null;
+  const withYear = str.match(/(\d{2})-(\d{2})-(\d{4})/);
+  if (withYear) {
+    const [, dd, mm, yyyy] = withYear;
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const noYear = str.match(/(\d{2})-(\d{2})\s*$/);
+  if (noYear) {
+    const [, dd, mm] = noYear;
+    const d = new Date(new Date().getFullYear(), Number(mm) - 1, Number(dd));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+// Oudste en meest recente datum over een set rijen — gebruikt bij het
+// inlezen om te tonen welke periode de ingelezen rapporten dekken.
+function reportPeriodLabel(rows) {
+  const dates = rows.map((r) => parseReportDate(r['date'])).filter(Boolean);
+  if (!dates.length) return null;
+  const min = new Date(Math.min(...dates));
+  const max = new Date(Math.max(...dates));
+  const fmt = (d) => d.toLocaleDateString('nl-BE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return min.getTime() === max.getTime() ? fmt(min) : `${fmt(min)} t/m ${fmt(max)}`;
 }
 
 function setStatus(msg, isErr) {

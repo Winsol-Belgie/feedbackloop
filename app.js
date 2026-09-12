@@ -158,14 +158,13 @@ const POTENTIAL_MIDPOINTS = {
   '150-500k': 325000, '500k-1m': 750000,
 };
 
-// Max. aantal opmerkingen per categorie/deel dat naar de AI gaat voor de
-// kwalitatieve synthese (kost/prompt-grootte begrenzen). Telt niet mee voor
-// de harde cijfers (aantallen, potentieel) — die gebruiken altijd alle rijen.
-// Met 7 categorieën x 2 delen kan dit snel oplopen (een rij kan nu in
-// meerdere categorieën tegelijk vallen); te hoog gaf een 502 (prompt te
-// groot/te traag). 60 blijft ruim voldoende om terugkerende thema's te
-// herkennen.
-const MAX_REMARKS_TO_AI = 60;
+// Batchgrootte: max. aantal opmerkingen per AI-aanroep (kost/prompt-grootte
+// begrenzen — te hoog gaf een 502, prompt te groot/te traag). Een categorie
+// met meer bruikbare opmerkingen dan dit wordt in meerdere batches
+// verdeeld die parallel naar de AI gaan en nadien samengevoegd worden
+// (zie analyzeCategory) — zo gaat geen enkele klant verloren, ook niet bij
+// grote gecombineerde datasets (meerdere Excel-bestanden).
+const BATCH_SIZE = 60;
 
 let parsedRows = [];
 // Laatst opgebouwde aggregatie (met volledige rij-detail per klant) —
@@ -563,14 +562,115 @@ function filterRemarkForCategory(remark, targetCat) {
   return kept.join(' ');
 }
 
-// Beperkte remarks-lijst (met klantnaam) om naar de AI te sturen — enkel
-// klanten die ook effectief iets geschreven hebben dat (na filtering) over
-// déze categorie gaat.
+// Remarks-lijst (met klantnaam) om naar de AI te sturen — enkel klanten die
+// ook effectief iets geschreven hebben dat (na filtering) over déze
+// categorie gaat. Geen limiet meer hier: analyzeCategory hieronder verdeelt
+// het resultaat zelf in batches van max. BATCH_SIZE opmerkingen.
 function remarksForAi(customers, targetCat) {
-  const filtered = customers
+  return customers
     .map((c) => ({ name: c.name, remark: filterRemarkForCategory(c.remark, targetCat) }))
     .filter((c) => c.remark);
-  return filtered.slice(0, MAX_REMARKS_TO_AI);
+}
+
+// Verdeelt een array in stukken van max. `size` elementen. Een lege array
+// geeft [[]] terug (één lege batch) zodat een categorie zonder opmerkingen
+// nog steeds als één (leeg) verzoek naar de AI gaat, zoals voorheen.
+function chunkArray(arr, size) {
+  if (arr.length <= size) return [arr];
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+// Voegt tekstvelden van meerdere batches samen tot één geheel (getrimd,
+// lege stukken overgeslagen, met een spatie gescheiden).
+function joinText(parts) {
+  return parts.map((p) => (p || '').trim()).filter(Boolean).join(' ');
+}
+
+// Eén AI-aanroep voor één batch (deel van) een categorie.
+async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum) {
+  const res = await fetch(ANALYZE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category: CATEGORY_LABELS[cat],
+      existing: { remarks: existingRemarks },
+      prospecting: { remarks: prospectingRemarks, potentialSum },
+    }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const errBody = await res.json();
+      detail = errBody.error || '';
+    } catch {
+      // response was not JSON (bv. een Cloudflare-foutpagina) — geen detail beschikbaar
+    }
+    throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
+  }
+  const data = await res.json();
+  return data.analysis;
+}
+
+// Voegt de analyses van meerdere batches van dezelfde categorie samen tot
+// één object met dezelfde vorm als een los batch-resultaat, zodat
+// buildGlobalOverview/renderResults ongewijzigd kunnen blijven. Lijstvelden
+// (themes, customer_sentiments, technical_issues, feature_requests,
+// barriers) worden geconcateneerd — gelijkaardige thema's uit verschillende
+// batches kunnen dus als aparte entries blijven staan i.p.v. samengevoegd
+// tot één thema (geen semantische deduplicatie tussen batches);
+// tekstvelden worden samengevoegd met joinText.
+function mergeCategoryAnalyses(analyses) {
+  const ec = analyses.map((a) => a.existing_customers || {});
+  const pr = analyses.map((a) => a.prospecting || {});
+  return {
+    existing_customers: {
+      general_impression: joinText(ec.map((e) => e.general_impression)),
+      themes: ec.flatMap((e) => e.themes || []),
+      customer_sentiments: ec.flatMap((e) => e.customer_sentiments || []),
+      technical_issues: ec.flatMap((e) => e.technical_issues || []),
+      feature_requests: ec.flatMap((e) => e.feature_requests || []),
+      benchmark_product: joinText(ec.map((e) => e.benchmark_product)),
+      benchmark_price: joinText(ec.map((e) => e.benchmark_price)),
+    },
+    prospecting: {
+      potential_summary: joinText(pr.map((p) => p.potential_summary)),
+      barriers: pr.flatMap((p) => p.barriers || []),
+    },
+  };
+}
+
+// Analyseert één categorie. Als er meer dan BATCH_SIZE bruikbare
+// opmerkingen zijn (bestaand en/of prospecting, elk apart geteld), wordt
+// dat deel in meerdere batches gesplitst die parallel naar de AI gaan; de
+// resultaten worden nadien samengevoegd tot één analyse voor de hele
+// categorie. Als één batch faalt maar minstens één andere lukt, gaat de
+// analyse door op basis van wat wel gelukt is (met een console.warn).
+async function analyzeCategory(cat, v) {
+  const existingAll = remarksForAi(v.existing.customers, cat);
+  const prospectingAll = remarksForAi(v.prospecting.customers, cat);
+  const existingChunks = chunkArray(existingAll, BATCH_SIZE);
+  const prospectingChunks = chunkArray(prospectingAll, BATCH_SIZE);
+  const batchCount = Math.max(existingChunks.length, prospectingChunks.length);
+
+  const settled = await Promise.allSettled(
+    Array.from({ length: batchCount }, (_, i) =>
+      fetchAnalysisBatch(cat, existingChunks[i] || [], prospectingChunks[i] || [], v.prospecting.potentialSum)
+    )
+  );
+
+  const analyses = [];
+  const errors = [];
+  for (const r of settled) {
+    if (r.status === 'fulfilled') analyses.push(r.value);
+    else errors.push(r.reason.message);
+  }
+  if (!analyses.length) throw new Error(errors.join('; ') || 'onbekende fout');
+  if (errors.length) {
+    console.warn(`[${cat}] ${errors.length}/${batchCount} batch(es) mislukt: ${errors.join('; ')}`);
+  }
+  return mergeCategoryAnalyses(analyses);
 }
 
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
@@ -582,34 +682,17 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   const cats = Object.keys(CATEGORY_LABELS);
   showProgress(0, cats.length);
 
-  // Eén (kleine, snelle) AI-aanroep per categorie, parallel — dat geeft
-  // een écht voortgangspunt (x van y klaar) in plaats van een nagebootste
-  // balk, en houdt elke aanroep klein genoeg om betrouwbaar te blijven.
+  // Eén analyse per categorie, parallel — dat geeft een écht
+  // voortgangspunt (x van y klaar) in plaats van een nagebootste balk.
+  // Elke categorie kan zelf uit meerdere AI-aanroepen bestaan als er veel
+  // opmerkingen zijn (zie analyzeCategory/BATCH_SIZE hierboven) — dat blijft
+  // hier verborgen, we wachten gewoon tot de hele categorie klaar is.
   let done = 0;
   const results = await Promise.all(cats.map(async (cat) => {
     const v = agg[cat];
     try {
-      const res = await fetch(ANALYZE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: CATEGORY_LABELS[cat],
-          existing: { remarks: remarksForAi(v.existing.customers, cat) },
-          prospecting: { remarks: remarksForAi(v.prospecting.customers, cat), potentialSum: v.prospecting.potentialSum },
-        }),
-      });
-      if (!res.ok) {
-        let detail = '';
-        try {
-          const errBody = await res.json();
-          detail = errBody.error || '';
-        } catch {
-          // response was not JSON (bv. een Cloudflare-foutpagina) — geen detail beschikbaar
-        }
-        throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
-      }
-      const data = await res.json();
-      return [cat, data.analysis, null];
+      const analysis = await analyzeCategory(cat, v);
+      return [cat, analysis, null];
     } catch (err) {
       return [cat, null, err.message];
     } finally {

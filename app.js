@@ -860,6 +860,7 @@ function renderResults(agg, aiCategories, globalOverview) {
         <h2 class="part-title" style="margin-top:18px;">Signalen voor R&amp;D &amp; Product Management</h2>
         ${renderTopicDomains(existingAi.topic_tags, cat, 'existing')}
         <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
+        ${renderWishBlock(existingAi.topic_tags, cat, 'existing')}
         <p class="narrative">${escapeHtml(existingAi.benchmark_product || '—')}</p>
         <h2 class="part-title" style="margin-top:18px;">Benchmark prijs</h2>
         <p class="narrative">${escapeHtml(existingAi.benchmark_price || '—')}</p>
@@ -1235,26 +1236,47 @@ function groupTopicTags(tags) {
   return domains;
 }
 
-// Overheersend sentiment binnen een topic-groep (voor de badge) — negatief
-// weegt door zodra er minstens één negatieve tag is, net als bij de
-// customer_sentiments-score (het meest kritische signaal telt).
-function dominantSentiment(entries) {
-  const counts = { negative: 0, positive: 0, neutral: 0 };
-  for (const e of entries) {
-    if (counts[e.sentiment] !== undefined) counts[e.sentiment]++;
-  }
-  if (counts.negative > 0) return 'negative';
-  if (counts.positive > 0) return 'positive';
-  return 'neutral';
-}
-
 // Eén uitklapbaar blokje per onderwerp: klantnamen (klikbaar, zie
 // renderDetailsBlock) plus een paar concrete voorbeeld-citaten (het
 // "detail"-veld per tag) — dat laatste is net wat een vaste taxonomie
 // zonder kleur zou missen: telbaar ÉN nog steeds herkenbaar per geval.
-function renderTopicBlock(topicLabel, bucket, cat, part) {
+// Gesegmenteerd staafje i.p.v. één tekstuele pos/neg/neutraal-pill: elk
+// individueel opmerking/tag (niet elke klant — één klant kan het onderwerp
+// meermaals aankaarten) is één segment, negatief links (rood), positief
+// rechts (groen), neutraal ertussen (grijs). Bij een gelijke stand
+// negatief/positief (het is dan geen duidelijk signaal de ene of de andere
+// kant op) wordt het hele staafje grijs i.p.v. een misleidende 50/50-split.
+function renderSentimentBar(entries) {
+  const neg = entries.filter((e) => e.sentiment === 'negative').length;
+  const pos = entries.filter((e) => e.sentiment === 'positive').length;
+  const neu = entries.filter((e) => e.sentiment === 'neutral').length;
+  const total = neg + pos + neu;
+  if (!total) return '';
+  const parts = [];
+  if (neg === pos) {
+    for (let i = 0; i < total; i++) parts.push('<span class="seg seg-neutral"></span>');
+  } else {
+    for (let i = 0; i < neg; i++) parts.push('<span class="seg seg-negative"></span>');
+    for (let i = 0; i < neu; i++) parts.push('<span class="seg seg-neutral"></span>');
+    for (let i = 0; i < pos; i++) parts.push('<span class="seg seg-positive"></span>');
+  }
+  return `<span class="sentiment-bar" title="${neg} negatief · ${neu} neutraal · ${pos} positief">${parts.join('')}</span>`;
+}
+
+// Zelfde visuele stijl/formaat als renderSentimentBar, maar dan blauw en
+// zonder sentiment-verdeling — puur het aantal gewenste features/opties
+// (zie renderWishBlock/Benchmark product).
+function renderWishBar(entries) {
+  const total = (entries || []).length;
+  if (!total) return '';
+  const parts = [];
+  for (let i = 0; i < total; i++) parts.push('<span class="seg seg-wish"></span>');
+  return `<span class="sentiment-bar wish-bar" title="${total} gewenste feature(s)/optie(s)">${parts.join('')}</span>`;
+}
+
+function renderTopicBlock(topicLabel, bucket, cat, part, barType) {
   const names = [...bucket.customers];
-  const sentiment = dominantSentiment(bucket.entries);
+  const bar = barType === 'wish' ? renderWishBar(bucket.entries) : renderSentimentBar(bucket.entries);
   // Voorbeeld-teksten ("detail") horen bij één specifieke klant (zelfde
   // topic_tag-entry) — koppel ze daarom aan die klant i.p.v. los boven de
   // klantenlijst te tonen. Per klant max. 2 unieke voorbeelden.
@@ -1279,11 +1301,23 @@ function renderTopicBlock(topicLabel, bucket, cat, part) {
     <details class="theme-details">
       <summary>
         <span class="theme-label">${escapeHtml(topicLabel)}</span>
-        <span class="theme-badges"><span class="pill ${sentiment}">${sentiment}</span> <span class="count-badge">${names.length}</span></span>
+        <span class="theme-badges">${bar}<span class="count-badge">${names.length}</span></span>
       </summary>
       ${inner}
     </details>
   `;
+}
+
+// "Ontbrekende functionaliteit/productwens" is geen sentiment-signaal maar
+// een verlanglijst — die hoort niet tussen de pos/neg-onderwerpen in
+// Product & Techniek, maar apart onder Benchmark product (zie renderResults).
+function renderWishBlock(tags, cat, part) {
+  const wishEntries = (tags || []).filter((t) => t && t.domain === 'product_techniek' && t.topic === 'feature_wens');
+  if (!wishEntries.length) return '';
+  const grouped = groupTopicTags(wishEntries);
+  const bucket = grouped.product_techniek && grouped.product_techniek.feature_wens;
+  if (!bucket) return '';
+  return renderTopicBlock('Gewenste features/opties', bucket, cat, part, 'wish');
 }
 
 // Rendert een of meerdere domeinen uit de taxonomie (zie TAXONOMY/
@@ -1298,7 +1332,10 @@ function renderTopicDomains(tags, cat, part, domainKeys) {
     const topics = grouped[domainKey];
     if (!topics) continue;
     const domainLabel = TAXONOMY[domainKey].label;
-    const topicKeys = Object.keys(topics).sort((a, b) => topics[b].customers.size - topics[a].customers.size);
+    const topicKeys = Object.keys(topics)
+      .filter((topicKey) => !(domainKey === 'product_techniek' && topicKey === 'feature_wens'))
+      .sort((a, b) => topics[b].customers.size - topics[a].customers.size);
+    if (!topicKeys.length) continue;
     const topicBlocks = topicKeys
       .map((topicKey) => renderTopicBlock(TAXONOMY[domainKey].topics[topicKey] || topicKey, topics[topicKey], cat, part))
       .join('');

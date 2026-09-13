@@ -210,7 +210,31 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
   </header>
 
   <div class="card" id="userPlaceholderCard" hidden>
-    <p id="userPlaceholder">Er is nog geen gedeelde data beschikbaar voor jouw account — deze functionaliteit volgt in een latere fase.</p>
+    <p id="userPlaceholder">Er is nog geen gedeelde data beschikbaar — van zodra een admin een analyse heeft uitgevoerd, verschijnen hier de filters.</p>
+  </div>
+
+  <div class="card" id="userViewCard" hidden>
+    <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
+    <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant. De resultaten komen uit de cache van de laatste analyses per opmerking — er gebeurt geen nieuwe AI-analyse. Verhalende samenvattingen en prospecting-cijfers zijn enkel beschikbaar na een nieuwe analyse door een admin.</p>
+    <div class="filter-row">
+      <label class="filter-field">
+        <span>Regio</span>
+        <select id="userFilterRegio"><option value="">Alle</option></select>
+      </label>
+      <label class="filter-field">
+        <span>Sales Rep</span>
+        <select id="userFilterRep"><option value="">Alle</option></select>
+      </label>
+      <label class="filter-field">
+        <span>Klant</span>
+        <input id="userFilterKlant" list="userFilterKlantList" placeholder="Alle" autocomplete="off">
+        <datalist id="userFilterKlantList"></datalist>
+      </label>
+    </div>
+    <div class="row">
+      <button class="btn" id="userViewBtn">Tonen</button>
+      <span class="status" id="userViewStatus"></span>
+    </div>
   </div>
 
   <div class="card" id="uploadCard">
@@ -308,6 +332,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609131045"></script>
+<script src="app.js?v=202609131130"></script>
 </body>
 </html>

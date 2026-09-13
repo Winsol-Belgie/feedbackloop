@@ -88,6 +88,11 @@ const TOPIC_TAXONOMY = {
 };
 
 const DOMAIN_KEYS = Object.keys(TOPIC_TAXONOMY);
+
+// Zelfde 7 categorieën als CATEGORY_LABELS in app.js — hier enkel nodig om
+// de gecachete weergave (Fase 5) altijd een consistente vorm te laten
+// teruggeven, ook voor een categorie zonder enige gecachete opmerking.
+const CATEGORY_KEYS = ['screens', 'shutters', 'fusion', 'awnings', 'pergola', 'outdoor', 'home'];
 const TOPIC_KEYS = DOMAIN_KEYS.flatMap((d) => Object.keys(TOPIC_TAXONOMY[d].topics));
 
 const ANALYSIS_TOOL = {
@@ -212,9 +217,20 @@ export default {
     if (!session) {
       return jsonResponse({ error: 'Niet ingelogd of sessie verlopen.' }, 401);
     }
-    // Uploaden/analyseren is enkel voor admins (zie Fase 1-afspraak: user
-    // ziet enkel filters op reeds gecachete data — die caching-laag komt in
-    // een latere fase; tot dan heeft een user-rol hier nog niets te doen).
+
+    // Fase 5: de gecachete weergave (filters op reeds geanalyseerde data,
+    // zonder nieuwe AI-aanroep) is precies wat de "user"-rol te zien
+    // krijgt — dus toegankelijk voor élke ingelogde rol, vóór de
+    // admin-only check hieronder (in tegenstelling tot uploaden/analyseren
+    // zelf, dat wel admin-only blijft).
+    if (body.mode === 'cached_options') {
+      return handleCachedOptions(env);
+    }
+    if (body.mode === 'cached_results') {
+      return handleCachedResults(body, env);
+    }
+
+    // Uploaden/analyseren is enkel voor admins.
     if (session.role !== 'admin') {
       return jsonResponse({ error: 'Enkel toegankelijk voor admins.' }, 403);
     }
@@ -319,11 +335,25 @@ export default {
           sourceFile: r.sourceFile,
           key: r.key,
           klant: r.name,
+          rep: r.rep || '',
+          regio: r.regio || '',
+          date: r.date || '',
+          type: r.type || '',
+          status: r.status || '',
+          remark: r.remark || '',
           sentiment: sentimentEntry ? sentimentEntry.sentiment : null,
           tags: tagsById.get(id) || [],
           storedAt: new Date().toISOString(),
         };
-        cacheWrites.push(env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${category}:${r.key}`, JSON.stringify(record)));
+        // "metadata" (Fase 5) staat naast de waarde zelf en is via KV.list()
+        // op te vragen zónder elke entry apart te moeten ophalen — zo kan
+        // cached_options/cached_results (zie hieronder) op regio/rep/klant
+        // filteren zonder duizenden losse KV.get()'s te doen.
+        cacheWrites.push(
+          env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${category}:${r.key}`, JSON.stringify(record), {
+            metadata: { category, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '' },
+          })
+        );
       });
       if (cacheWrites.length) {
         try {
@@ -652,6 +682,102 @@ async function handleCacheInvalidateFiles(body, env) {
 async function handleCacheReset(env) {
   const deleted = await deleteByPrefix(env.FEEDBACKLOOP_KV, 'remark:');
   return jsonResponse({ deleted });
+}
+
+// Fase 5: geeft de distincte regio/rep/klant-waarden terug die momenteel in
+// de cache zitten — hiermee kan de "user"-rol dezelfde 3 filters invullen
+// als een admin, zonder ooit zelf iets opgeladen te hebben. Gebruikt de
+// metadata die bij elke cache-entry werd meegeschreven (zie de
+// KV.put(...,{metadata}) hierboven) i.p.v. elke entry apart op te halen —
+// dat zou bij veel entries traag/duur worden.
+async function handleCachedOptions(env) {
+  const regios = new Set();
+  const reps = new Set();
+  const klanten = new Set();
+  let total = 0;
+  let cursor;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    for (const k of page.keys) {
+      total++;
+      const m = k.metadata || {};
+      if (m.regio) regios.add(m.regio);
+      if (m.rep) reps.add(m.rep);
+      if (m.klant) klanten.add(m.klant);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  return jsonResponse({
+    hasData: total > 0,
+    regios: [...regios].sort((a, b) => a.localeCompare(b)),
+    reps: [...reps].sort((a, b) => a.localeCompare(b)),
+    klanten: [...klanten].sort((a, b) => a.localeCompare(b)),
+  });
+}
+
+// Cap op het aantal gecachete opmerkingen dat in één keer volledig
+// opgehaald (KV.get) wordt voor een cached_results-aanvraag. Elke KV.get()
+// telt mee als een subrequest, en Cloudflare Workers laat daar per
+// aanvraag maar een beperkt aantal van toe — deze waarde blijft daar ruim
+// onder, met marge voor de list()-aanroepen erboven. Bij méér matches dan
+// dit wordt het resultaat afgekapt (zie "truncated" in de response) en kan
+// verder gefilterd worden (regio/rep/klant) om onder de grens te komen.
+const CACHE_READ_LIMIT = 800;
+
+// Fase 5: bouwt, ZONDER nieuwe AI-aanroep, per categorie een
+// topic_tags/customer_sentiments/customers-set op uit de cache — exact de
+// vorm die de bestaande render-functies in app.js al verwachten (zie
+// renderResults/buildGlobalOverview/renderTopicDomains), enkel de
+// verhalende AI-tekst (general_impression/benchmark_*/potential_summary)
+// ontbreekt: die is nooit per opmerking gecached (Fase 4) en kan dus niet
+// zonder AI-aanroep gereconstrueerd worden. Filtert eerst goedkoop via de
+// KV-metadata (regio/rep/klant), en haalt pas voor de match(en) de
+// volledige waarde op.
+async function handleCachedResults(body, env) {
+  const regioFilter = (body.regio || '').trim();
+  const repFilter = (body.rep || '').trim();
+  const klantFilter = (body.klant || '').trim();
+
+  const matchingKeys = [];
+  let total = 0;
+  let cursor;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    for (const k of page.keys) {
+      total++;
+      const m = k.metadata || {};
+      if (regioFilter && m.regio !== regioFilter) continue;
+      if (repFilter && m.rep !== repFilter) continue;
+      if (klantFilter && m.klant !== klantFilter) continue;
+      matchingKeys.push(k.name);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  const cappedKeys = matchingKeys.slice(0, CACHE_READ_LIMIT);
+  const records = await Promise.all(cappedKeys.map((name) => env.FEEDBACKLOOP_KV.get(name, 'json')));
+
+  const categories = {};
+  for (const cat of CATEGORY_KEYS) {
+    categories[cat] = { customers: [], topic_tags: [], customer_sentiments: [] };
+  }
+  for (const rec of records) {
+    if (!rec || !categories[rec.category]) continue;
+    const bucket = categories[rec.category];
+    bucket.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
+    bucket.customer_sentiments.push({ customer: rec.klant, sentiment: rec.sentiment });
+    for (const t of rec.tags || []) {
+      bucket.topic_tags.push({ customer: rec.klant, domain: t.domain, topic: t.topic, sentiment: t.sentiment, detail: t.detail, competitor: t.competitor || '' });
+    }
+  }
+
+  return jsonResponse({
+    categories,
+    total,
+    matched: matchingKeys.length,
+    truncated: matchingKeys.length > cappedKeys.length,
+  });
 }
 
 function corsHeaders() {

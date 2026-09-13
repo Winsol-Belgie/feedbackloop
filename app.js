@@ -288,6 +288,13 @@ const topbarRole = document.getElementById('topbarRole');
 const logoutBtn = document.getElementById('logoutBtn');
 const uploadCard = document.getElementById('uploadCard');
 const userPlaceholderCard = document.getElementById('userPlaceholderCard');
+const userViewCard = document.getElementById('userViewCard');
+const userFilterRegio = document.getElementById('userFilterRegio');
+const userFilterRep = document.getElementById('userFilterRep');
+const userFilterKlant = document.getElementById('userFilterKlant');
+const userFilterKlantList = document.getElementById('userFilterKlantList');
+const userViewBtn = document.getElementById('userViewBtn');
+const userViewStatus = document.getElementById('userViewStatus');
 const usersCard = document.getElementById('usersCard');
 const usersDropzone = document.getElementById('usersDropzone');
 const usersFileInput = document.getElementById('usersFileInput');
@@ -325,14 +332,19 @@ function showApp(username, role) {
   topbarUser.textContent = username;
   topbarRole.textContent = role === 'admin' ? 'admin' : 'user';
   const isAdmin = role === 'admin';
-  // Fase 1: enkel admins kunnen uploaden/analyseren. De user-rol krijgt pas
-  // vanaf Fase 4/5 (KV-caching + her-aggregatie) iets te zien; tot dan een
-  // duidelijke placeholder i.p.v. een lege/verwarrende pagina.
+  // Admin: upload/analyseren/beheer. User: enkel filters op de gecachete
+  // data (Fase 5) — welke van de twee kaarten (placeholder of echte
+  // filters) verschijnt, hangt af van of de cache al iets bevat; dat wordt
+  // hieronder async bepaald via loadUserView().
   uploadCard.hidden = !isAdmin;
   filterCard.hidden = true;
   usersCard.hidden = !isAdmin;
   cacheCard.hidden = !isAdmin;
-  userPlaceholderCard.hidden = isAdmin;
+  userPlaceholderCard.hidden = true;
+  userViewCard.hidden = true;
+  if (!isAdmin) {
+    loadUserView();
+  }
 }
 
 function showLogin(message) {
@@ -658,6 +670,105 @@ cacheResetBtn.addEventListener('click', async () => {
   }
 });
 
+// ============================================================
+// Fase 5: gecachete weergave voor de "user"-rol — filters op reeds
+// geanalyseerde data (Fase 4-cache), zonder dat er ooit iets opgeladen of
+// een nieuwe AI-analyse gestart moet worden. Hergebruikt bewust dezelfde
+// render-functies als het admin-pad (renderResults/buildGlobalOverview/
+// renderTopicDomains e.a.) door er een "agg"/"aiCategories" van dezelfde
+// vorm voor op te bouwen — enkel de verhalende AI-tekst (general_impression,
+// benchmark_product/prijs, prospecting potential_summary/barriers)
+// ontbreekt, want die is nooit per opmerking gecached (bewuste keuze in
+// Fase 4: enkel bestaande klanten, enkel sentiment + topic_tags) en zou
+// zonder nieuwe AI-aanroep niet te reconstrueren zijn.
+// ============================================================
+async function loadUserView() {
+  userViewStatus.textContent = '';
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'cached_options' });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok || !data.hasData) {
+      userPlaceholderCard.hidden = false;
+      userViewCard.hidden = true;
+      if (!ok) {
+        document.getElementById('userPlaceholder').textContent =
+          'Kon de beschikbare data niet laden: ' + ((data && data.error) || 'onbekende fout') + '.';
+      }
+      return;
+    }
+    userPlaceholderCard.hidden = true;
+    userViewCard.hidden = false;
+    userFilterRegio.innerHTML = '<option value="">Alle</option>' + data.regios.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
+    userFilterRep.innerHTML = '<option value="">Alle</option>' + data.reps.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
+    userFilterKlantList.innerHTML = data.klanten.map((k) => `<option value="${escapeAttr(k)}"></option>`).join('');
+  } catch (err) {
+    userPlaceholderCard.hidden = false;
+    userViewCard.hidden = true;
+    document.getElementById('userPlaceholder').textContent = 'Kon de beschikbare data niet laden: ' + err.message + '.';
+  }
+}
+
+userViewBtn.addEventListener('click', async () => {
+  userViewBtn.disabled = true;
+  userViewStatus.textContent = 'Resultaten laden...';
+  userViewStatus.className = 'status';
+  try {
+    const { ok, status, data } = await authRequest({
+      mode: 'cached_results',
+      regio: userFilterRegio.value,
+      rep: userFilterRep.value,
+      klant: userFilterKlant.value.trim(),
+    });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      userViewStatus.textContent = (data && data.error) || 'Laden mislukt.';
+      userViewStatus.className = 'status err';
+      userViewBtn.disabled = false;
+      return;
+    }
+
+    const agg = {};
+    const aiCategories = {};
+    for (const cat of Object.keys(CATEGORY_LABELS)) {
+      const c = data.categories[cat] || { customers: [], topic_tags: [], customer_sentiments: [] };
+      agg[cat] = { existing: { customers: c.customers }, prospecting: { customers: [], potentialSum: 0 } };
+      aiCategories[cat] = {
+        existing_customers: {
+          general_impression: c.customers.length
+            ? 'Verhalende samenvatting is niet beschikbaar in deze cache-weergave — enkel na een nieuwe analyse door een admin. De cijfers en thema\'s hieronder komen wél rechtstreeks uit de cache.'
+            : '',
+          customer_sentiments: c.customer_sentiments,
+          topic_tags: c.topic_tags,
+          benchmark_product: '',
+          benchmark_price: '',
+        },
+        prospecting: { potential_summary: '', barriers: [] },
+      };
+    }
+    lastAgg = agg;
+    const globalOverview = buildGlobalOverview(agg, aiCategories);
+    renderResults(agg, aiCategories, globalOverview);
+    const summaryEl = document.getElementById('globalSummaryText');
+    if (summaryEl) {
+      summaryEl.classList.remove('loading');
+      summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze cache-weergave (enkel na een nieuwe analyse door een admin). Prospecting-cijfers zijn hier ook niet inbegrepen — die worden nog niet per opmerking gecached.';
+    }
+    userViewStatus.textContent = `${data.matched} gecachete opmerking(en) gevonden` + (data.truncated ? ' (resultaat afgekapt — te veel matches, verfijn de filters)' : '') + '.';
+    userViewStatus.className = 'status';
+    userViewBtn.disabled = false;
+  } catch (err) {
+    userViewStatus.textContent = 'Laden mislukt: ' + err.message;
+    userViewStatus.className = 'status err';
+    userViewBtn.disabled = false;
+  }
+});
+
 // Stap 1 — Filteren: bouwt de twee filters op uit de ingelezen data (Sales
 // Rep = kolom Q, Klant = kolom B) en toont de filterkaart. De analyse zelf
 // (stap 2) gebeurt pas na een klik op "Analyseren", met de dan geldende
@@ -924,6 +1035,7 @@ function buildAggregation(rows) {
       date: row['date'] || '',
       type: row['type'] || '',
       status: row['status'] || '',
+      regio: row['regio'] || '',
       key: remarkCacheKey(name, row['date'], remark),
       sourceFile: row['sourceFile'] || '',
     };
@@ -986,7 +1098,17 @@ function filterRemarkForCategory(remark, targetCat) {
 // het resultaat zelf in batches van max. BATCH_SIZE opmerkingen.
 function remarksForAi(customers, targetCat) {
   return customers
-    .map((c) => ({ name: c.name, remark: filterRemarkForCategory(c.remark, targetCat), key: c.key, sourceFile: c.sourceFile }))
+    .map((c) => ({
+      name: c.name,
+      remark: filterRemarkForCategory(c.remark, targetCat),
+      key: c.key,
+      sourceFile: c.sourceFile,
+      rep: c.rep,
+      regio: c.regio,
+      date: c.date,
+      type: c.type,
+      status: c.status,
+    }))
     .filter((c) => c.remark);
 }
 

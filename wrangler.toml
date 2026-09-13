@@ -1,3 +1,9 @@
 name = "feedbackloop"
 main = "worker.js"
 compatibility_date = "2026-09-01"
+
+# Wordt aangemaakt met: npx wrangler kv namespace create FEEDBACKLOOP_KV
+# Vervang "REPLACE_WITH_KV_ID" hieronder door de "id" die dat commando teruggeeft.
+[[kv_namespaces]]
+binding = "FEEDBACKLOOP_KV"
+id = "REPLACE_WITH_KV_ID"

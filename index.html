@@ -150,16 +150,69 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 .collapse-toggle{flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:8px;width:28px;height:28px;font-size:13px;line-height:1;cursor:pointer;color:var(--ink-soft);}
 .collapse-toggle:hover{background:var(--line);}
 #uploadBody,#filterBody{margin-top:4px;}
+
+/* --- Login (Fase 1) --- */
+#loginScreen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+.login-card{background:var(--paper-2);border:1px solid var(--line);border-radius:18px;padding:32px 28px;max-width:360px;width:100%;text-align:center;}
+.login-card h1{font-size:20px;margin:0 0 4px;color:var(--ink);}
+.login-card .login-sub{color:var(--ink-faint);font-size:13px;margin:0 0 20px;}
+.login-form{display:flex;flex-direction:column;gap:12px;text-align:left;}
+.login-form input[type=text],.login-form input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:inherit;font-size:14px;background:var(--paper);}
+.login-form input:focus{outline:2px solid var(--accent);outline-offset:1px;}
+.login-pw-wrap{position:relative;}
+.login-pw-wrap input{padding-right:38px !important;}
+.login-pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--ink-faint);font-size:16px;padding:4px;}
+.login-remember{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);cursor:pointer;}
+.login-remember input{margin:0;}
+.login-btn{width:100%;}
+.login-error{color:var(--bad);font-size:13px;min-height:16px;}
+.login-contact{color:var(--ink-faint);font-size:12px;margin-top:4px;}
+.login-contact a{color:var(--info);}
+#appRoot{display:none;}
+.topbar{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:-8px;padding-bottom:16px;font-size:13px;color:var(--ink-faint);}
+.topbar b{color:var(--ink);}
+.topbar .btn.secondary{padding:6px 14px;font-size:12px;border-radius:8px;}
+#userPlaceholder{color:var(--ink-faint);font-size:14px;}
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>Feedbackloop</h1>
+    <p class="login-sub">Log in om verder te gaan.</p>
+    <div class="login-form">
+      <input type="text" id="loginUsername" placeholder="Gebruikersnaam" autocomplete="username">
+      <div class="login-pw-wrap">
+        <input type="password" id="loginPassword" placeholder="Wachtwoord" autocomplete="current-password">
+        <button type="button" id="loginPwToggle" class="login-pw-eye" title="Wachtwoord tonen/verbergen" tabindex="-1">&#128065;</button>
+      </div>
+      <label class="login-remember">
+        <input type="checkbox" id="loginRemember">
+        <span>Blijf aangemeld</span>
+      </label>
+      <button class="btn login-btn" id="loginSubmitBtn" type="button">Aanmelden</button>
+      <div class="login-error" id="loginError"></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" id="appRoot">
+  <div class="topbar" id="topbar" hidden>
+    <span>Ingelogd als <b id="topbarUser"></b> (<span id="topbarRole"></span>)</span>
+    <button class="btn secondary" id="logoutBtn" type="button">Uitloggen</button>
+  </div>
+
   <header class="hero">
     <h1>Feedbackloop</h1>
     <p>Upload de CRM-export en laat AI de klantenfeedback analyseren per productcategorie.</p>
   </header>
 
-  <div class="card">
+  <div class="card" id="userPlaceholderCard" hidden>
+    <p id="userPlaceholder">Er is nog geen gedeelde data beschikbaar voor jouw account — deze functionaliteit volgt in een latere fase.</p>
+  </div>
+
+  <div class="card" id="uploadCard">
     <div class="card-head">
       <p class="collapse-summary" id="uploadSummary" hidden></p>
       <button class="collapse-toggle" id="uploadToggle" type="button" aria-expanded="true" aria-controls="uploadBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
@@ -220,6 +273,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609130819"></script>
+<script src="app.js?v=202609130915"></script>
 </body>
 </html>

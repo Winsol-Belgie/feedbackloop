@@ -257,6 +257,159 @@ const filterBody = document.getElementById('filterBody');
 const filterToggle = document.getElementById('filterToggle');
 const filterSummary = document.getElementById('filterSummary');
 
+// ============================================================
+// Auth (Fase 1: login & rollen)
+// ============================================================
+// Token wordt bewaard in localStorage ("blijf aangemeld") of sessionStorage
+// (enkel dit tabblad/deze sessie) — zelfde patroon als Winsol-Socrates.
+// Alle aanroepen naar de Worker (analyse, globale samenvatting, auth zelf)
+// sturen de token mee via de X-Auth-Token header (zie authHeaders()).
+const TOKEN_KEY = 'feedbackloop_token';
+let authToken = '';
+let authRole = '';
+let authUsername = '';
+
+function authHeaders() {
+  return authToken ? { 'X-Auth-Token': authToken } : {};
+}
+
+const loginScreen = document.getElementById('loginScreen');
+const appRoot = document.getElementById('appRoot');
+const loginUsername = document.getElementById('loginUsername');
+const loginPassword = document.getElementById('loginPassword');
+const loginPwToggle = document.getElementById('loginPwToggle');
+const loginRemember = document.getElementById('loginRemember');
+const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+const loginError = document.getElementById('loginError');
+const topbar = document.getElementById('topbar');
+const topbarUser = document.getElementById('topbarUser');
+const topbarRole = document.getElementById('topbarRole');
+const logoutBtn = document.getElementById('logoutBtn');
+const uploadCard = document.getElementById('uploadCard');
+const userPlaceholderCard = document.getElementById('userPlaceholderCard');
+
+async function authRequest(bodyObj) {
+  const res = await fetch(ANALYZE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(bodyObj),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    // geen (geldige) JSON-body
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+function showApp(username, role) {
+  authUsername = username;
+  authRole = role;
+  loginScreen.style.display = 'none';
+  appRoot.style.display = 'block';
+  topbar.hidden = false;
+  topbarUser.textContent = username;
+  topbarRole.textContent = role === 'admin' ? 'admin' : 'user';
+  const isAdmin = role === 'admin';
+  // Fase 1: enkel admins kunnen uploaden/analyseren. De user-rol krijgt pas
+  // vanaf Fase 4/5 (KV-caching + her-aggregatie) iets te zien; tot dan een
+  // duidelijke placeholder i.p.v. een lege/verwarrende pagina.
+  uploadCard.hidden = !isAdmin;
+  filterCard.hidden = true;
+  userPlaceholderCard.hidden = isAdmin;
+}
+
+function showLogin(message) {
+  authToken = '';
+  authRole = '';
+  authUsername = '';
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // localStorage/sessionStorage kan geblokkeerd zijn (privénavigatie) — geen probleem
+  }
+  appRoot.style.display = 'none';
+  loginScreen.style.display = 'flex';
+  topbar.hidden = true;
+  loginPassword.value = '';
+  loginError.textContent = message || '';
+}
+
+async function doLogin() {
+  const username = loginUsername.value.trim();
+  const password = loginPassword.value;
+  const remember = loginRemember.checked;
+  loginError.textContent = '';
+  if (!username || !password) {
+    loginError.textContent = 'Vul gebruikersnaam en wachtwoord in.';
+    return;
+  }
+  loginSubmitBtn.disabled = true;
+  loginSubmitBtn.textContent = 'Aanmelden…';
+  try {
+    const { ok, data } = await authRequest({ mode: 'login', username, password, remember });
+    if (!ok) {
+      loginError.textContent = data.error || 'Aanmelden mislukt.';
+      return;
+    }
+    authToken = data.token;
+    const storage = remember ? localStorage : sessionStorage;
+    try {
+      storage.setItem(TOKEN_KEY, authToken);
+    } catch {
+      // storage geblokkeerd — token blijft dan enkel in het geheugen (werkt nog tot page refresh)
+    }
+    showApp(data.username, data.role);
+  } catch {
+    loginError.textContent = 'Kon niet verbinden met de server.';
+  } finally {
+    loginSubmitBtn.disabled = false;
+    loginSubmitBtn.textContent = 'Aanmelden';
+  }
+}
+
+loginSubmitBtn.addEventListener('click', doLogin);
+loginPassword.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+loginUsername.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') loginPassword.focus();
+});
+loginPwToggle.addEventListener('click', () => {
+  loginPassword.type = loginPassword.type === 'password' ? 'text' : 'password';
+});
+logoutBtn.addEventListener('click', async () => {
+  try {
+    await authRequest({ mode: 'logout' });
+  } catch {
+    // best-effort — lokaal loggen we sowieso uit
+  }
+  showLogin();
+});
+
+async function tryRestoreSession() {
+  const token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
+  if (!token) {
+    showLogin();
+    return;
+  }
+  authToken = token;
+  try {
+    const { ok, data } = await authRequest({ mode: 'auth_me' });
+    if (ok) {
+      showApp(data.username, data.role);
+    } else {
+      showLogin();
+    }
+  } catch {
+    showLogin('Kon niet verbinden met de server — probeer opnieuw in te loggen.');
+  }
+}
+
+tryRestoreSession();
+
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
@@ -670,7 +823,7 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
   try {
     res = await fetch(ANALYZE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         category: CATEGORY_LABELS[cat],
         existing: { remarks: existingRemarks },
@@ -685,6 +838,13 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
       return fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum, attempt + 1);
     }
     throw new Error(`netwerkfout: ${networkErr.message}`);
+  }
+  if (res.status === 401 || res.status === 403) {
+    // Sessie verlopen/ongeldig, of geen rechten — retryen heeft hier geen
+    // zin. Toon meteen het inlogscherm i.p.v. dit als een gewone fout per
+    // batch/categorie te laten falen.
+    showLogin(res.status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+    throw new Error(res.status === 401 ? 'sessie verlopen' : 'geen toegang');
   }
   if (!res.ok) {
     const transient = res.status === 429 || res.status === 529 || res.status >= 500;
@@ -1186,7 +1346,7 @@ async function loadGlobalSummary(overview) {
   try {
     const res = await fetch(ANALYZE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ mode: 'global_summary', categories }),
     });
     if (!res.ok) {

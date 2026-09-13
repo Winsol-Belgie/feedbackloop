@@ -190,15 +190,37 @@ export default {
       return jsonResponse({ error: 'Method not allowed' }, 405);
     }
 
-    if (!env.ANTHROPIC_API_KEY) {
-      return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt (wrangler secret put ANTHROPIC_API_KEY).' }, 500);
-    }
-
     let body;
     try {
       body = await request.json();
     } catch {
       return jsonResponse({ error: 'Ongeldige request body.' }, 400);
+    }
+
+    // --- Auth-routes: geen ANTHROPIC_API_KEY nodig, geen AI-aanroep. ---
+    if (body.mode === 'login') return handleLogin(body, env);
+    if (body.mode === 'logout') return handleLogout(request, env);
+    if (body.mode === 'auth_me') {
+      const session = await getSession(request, env);
+      return session
+        ? jsonResponse({ username: session.username, role: session.role })
+        : jsonResponse({ error: 'Niet ingelogd of sessie verlopen.' }, 401);
+    }
+
+    // --- Alles hieronder vereist een geldige, ingelogde sessie. ---
+    const session = await getSession(request, env);
+    if (!session) {
+      return jsonResponse({ error: 'Niet ingelogd of sessie verlopen.' }, 401);
+    }
+    // Uploaden/analyseren is enkel voor admins (zie Fase 1-afspraak: user
+    // ziet enkel filters op reeds gecachete data — die caching-laag komt in
+    // een latere fase; tot dan heeft een user-rol hier nog niets te doen).
+    if (session.role !== 'admin') {
+      return jsonResponse({ error: 'Enkel toegankelijk voor admins.' }, 403);
+    }
+
+    if (!env.ANTHROPIC_API_KEY) {
+      return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt (wrangler secret put ANTHROPIC_API_KEY).' }, 500);
     }
 
     // Aparte, lichte modus voor de "Globaal"-tab in de frontend: krijgt
@@ -404,11 +426,95 @@ function buildGlobalSummaryPrompt(categories) {
   ].join('\n');
 }
 
+// ============================================================
+// Auth (Fase 1: login & rollen) — users en sessies in Workers KV.
+// ============================================================
+//
+// KV-keys:
+//   user:<username>    -> { username, passwordHash, role }        (geen vervaldatum)
+//   session:<token>    -> { username, role }                      (expirationTtl, zie hieronder)
+//
+// Wachtwoorden worden nooit leesbaar bewaard: sha256(wachtwoord + PASSWORD_PEPPER),
+// PASSWORD_PEPPER is een Worker-secret (wrangler secret put PASSWORD_PEPPER),
+// dus zelfs met leestoegang tot de KV-inhoud alleen kan een wachtwoord niet
+// teruggerekend worden zonder ook die secret te kennen.
+
+const SESSION_TTL_REMEMBER = 60 * 60 * 24 * 30; // 30 dagen ("blijf aangemeld")
+const SESSION_TTL_DEFAULT = 60 * 60 * 12; // 12 uur
+
+async function sha256Hex(str) {
+  const data = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(hashBuffer)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function randomToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function getSession(request, env) {
+  const token = request.headers.get('X-Auth-Token') || '';
+  if (!token) return null;
+  const raw = await env.FEEDBACKLOOP_KV.get(`session:${token}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function handleLogin(body, env) {
+  const username = (body.username || '').trim();
+  const password = body.password || '';
+  const remember = !!body.remember;
+  if (!username || !password) {
+    return jsonResponse({ error: 'Gebruikersnaam en wachtwoord verplicht.' }, 400);
+  }
+  if (!env.PASSWORD_PEPPER) {
+    return jsonResponse({ error: 'PASSWORD_PEPPER ontbreekt (wrangler secret put PASSWORD_PEPPER).' }, 500);
+  }
+
+  const userRaw = await env.FEEDBACKLOOP_KV.get(`user:${username}`);
+  if (!userRaw) {
+    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+  }
+  let user;
+  try {
+    user = JSON.parse(userRaw);
+  } catch {
+    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+  }
+
+  const hash = await sha256Hex(password + env.PASSWORD_PEPPER);
+  if (hash !== user.passwordHash) {
+    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+  }
+
+  const token = randomToken();
+  const ttl = remember ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT;
+  await env.FEEDBACKLOOP_KV.put(
+    `session:${token}`,
+    JSON.stringify({ username: user.username, role: user.role }),
+    { expirationTtl: ttl }
+  );
+  return jsonResponse({ token, username: user.username, role: user.role });
+}
+
+async function handleLogout(request, env) {
+  const token = request.headers.get('X-Auth-Token') || '';
+  if (token) {
+    await env.FEEDBACKLOOP_KV.delete(`session:${token}`);
+  }
+  return jsonResponse({ ok: true });
+}
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Auth-Token',
   };
 }
 

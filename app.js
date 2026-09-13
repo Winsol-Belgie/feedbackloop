@@ -287,6 +287,12 @@ const topbarRole = document.getElementById('topbarRole');
 const logoutBtn = document.getElementById('logoutBtn');
 const uploadCard = document.getElementById('uploadCard');
 const userPlaceholderCard = document.getElementById('userPlaceholderCard');
+const usersCard = document.getElementById('usersCard');
+const usersDropzone = document.getElementById('usersDropzone');
+const usersFileInput = document.getElementById('usersFileInput');
+const usersFname = document.getElementById('usersFname');
+const usersUpdateBtn = document.getElementById('usersUpdateBtn');
+const usersStatus = document.getElementById('usersStatus');
 
 async function authRequest(bodyObj) {
   const res = await fetch(ANALYZE_URL, {
@@ -317,6 +323,7 @@ function showApp(username, role) {
   // duidelijke placeholder i.p.v. een lege/verwarrende pagina.
   uploadCard.hidden = !isAdmin;
   filterCard.hidden = true;
+  usersCard.hidden = !isAdmin;
   userPlaceholderCard.hidden = isAdmin;
 }
 
@@ -489,6 +496,89 @@ async function handleFiles(fileList) {
   setStatus(msg, failed.length > 0);
   filterBtn.disabled = parsedRows.length === 0;
 }
+
+// ============================================================
+// Fase 2: Users beheren (admin) — upload van een Users-Excel (kolommen
+// USER/PW/ROLE, zelfde structuur als het bestand waarmee de admin/Test-
+// accounts oorspronkelijk via wrangler werden aangemaakt) om accounts
+// voortaan zelf te kunnen toevoegen/bijwerken zonder wrangler-commando's.
+// Hergebruikt readFileRows: normalizeRows maakt kolomnamen al lowercase +
+// getrimd, dus de kolommen komen hier binnen als 'user', 'pw', 'role'.
+// Bestaande gebruikers die niet in het bestand voorkomen blijven
+// ongewijzigd (upsert, geen volledige vervanging) — de Worker (mode
+// admin_upsert_users) doet enkel toevoegen/overschrijven per username.
+// ============================================================
+let parsedUserRows = [];
+
+function setUsersStatus(msg, isErr) {
+  usersStatus.textContent = msg;
+  usersStatus.className = 'status' + (isErr ? ' err' : '');
+}
+
+usersDropzone.addEventListener('click', () => usersFileInput.click());
+usersDropzone.addEventListener('dragover', (e) => { e.preventDefault(); usersDropzone.classList.add('drag'); });
+usersDropzone.addEventListener('dragleave', () => usersDropzone.classList.remove('drag'));
+usersDropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  usersDropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleUsersFile(e.dataTransfer.files[0]);
+});
+usersFileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleUsersFile(e.target.files[0]);
+});
+
+async function handleUsersFile(file) {
+  usersFname.textContent = file.name;
+  setUsersStatus('Bestand inlezen...');
+  usersUpdateBtn.disabled = true;
+  parsedUserRows = [];
+  let parsed;
+  try {
+    parsed = await readFileRows(file);
+  } catch (err) {
+    setUsersStatus(err.message, true);
+    return;
+  }
+  const rows = parsed.rows
+    .map((r) => ({
+      username: (r['user'] || '').trim(),
+      password: (r['pw'] || '').trim(),
+      role: (r['role'] || '').trim().toLowerCase(),
+    }))
+    .filter((r) => r.username || r.password);
+  if (!rows.length) {
+    setUsersStatus('Geen bruikbare rijen gevonden — verwacht kolommen USER, PW en ROLE.', true);
+    return;
+  }
+  parsedUserRows = rows;
+  setUsersStatus(`${rows.length} rijen ingelezen uit "${parsed.sheetName}". Klik op "Users bijwerken" om te bevestigen.`);
+  usersUpdateBtn.disabled = false;
+}
+
+usersUpdateBtn.addEventListener('click', async () => {
+  if (!parsedUserRows.length) return;
+  usersUpdateBtn.disabled = true;
+  setUsersStatus('Bezig met bijwerken...');
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'admin_upsert_users', users: parsedUserRows });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      setUsersStatus((data && data.error) || 'Bijwerken mislukt.', true);
+      usersUpdateBtn.disabled = false;
+      return;
+    }
+    let msg = `${data.updated} van ${data.total} gebruikers bijgewerkt.`;
+    if (data.errors && data.errors.length) msg += ` Fouten: ${data.errors.join('; ')}`;
+    setUsersStatus(msg, !!(data.errors && data.errors.length));
+    usersUpdateBtn.disabled = false;
+  } catch (err) {
+    setUsersStatus('Bijwerken mislukt: ' + err.message, true);
+    usersUpdateBtn.disabled = false;
+  }
+});
 
 // Stap 1 — Filteren: bouwt de twee filters op uit de ingelezen data (Sales
 // Rep = kolom Q, Klant = kolom B) en toont de filterkaart. De analyse zelf

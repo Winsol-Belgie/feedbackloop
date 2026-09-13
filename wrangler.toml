@@ -6,4 +6,4 @@ compatibility_date = "2026-09-01"
 # Vervang "REPLACE_WITH_KV_ID" hieronder door de "id" die dat commando teruggeeft.
 [[kv_namespaces]]
 binding = "FEEDBACKLOOP_KV"
-id = "REPLACE_WITH_KV_ID"
+id = "822a7fa8bd504da7964eac0ee8c0f6a5"

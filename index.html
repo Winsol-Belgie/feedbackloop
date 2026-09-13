@@ -259,6 +259,20 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
     </div>
   </div>
 
+  <div class="card" id="usersCard" hidden>
+    <h2 class="part-title">Gebruikers beheren</h2>
+    <p class="part-sub">Upload een Excel met kolommen USER, PW en ROLE (admin of user) om gebruikers toe te voegen of bij te werken. Bestaande gebruikers die niet in het bestand staan, blijven ongewijzigd.</p>
+    <div class="dropzone" id="usersDropzone">
+      <p><strong>Sleep het Users-Excel hierheen</strong> of klik om te bladeren</p>
+      <p class="fname" id="usersFname">Geen bestand gekozen</p>
+      <input type="file" id="usersFileInput" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="row">
+      <button class="btn" id="usersUpdateBtn" disabled>Users bijwerken</button>
+      <span class="status" id="usersStatus"></span>
+    </div>
+  </div>
+
   <div id="results">
     <div class="tabs" id="tabs"></div>
     <div id="sections"></div>
@@ -273,6 +287,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609130915"></script>
+<script src="app.js?v=202609130940"></script>
 </body>
 </html>

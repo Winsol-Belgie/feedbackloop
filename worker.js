@@ -219,6 +219,12 @@ export default {
       return jsonResponse({ error: 'Enkel toegankelijk voor admins.' }, 403);
     }
 
+    // Users beheren (Fase 2) is ook admin-only maar heeft geen AI-aanroep
+    // nodig — dus vóór de ANTHROPIC_API_KEY-check, net als global_summary.
+    if (body.mode === 'admin_upsert_users') {
+      return handleAdminUpsertUsers(body, env);
+    }
+
     if (!env.ANTHROPIC_API_KEY) {
       return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt (wrangler secret put ANTHROPIC_API_KEY).' }, 500);
     }
@@ -508,6 +514,46 @@ async function handleLogout(request, env) {
     await env.FEEDBACKLOOP_KV.delete(`session:${token}`);
   }
   return jsonResponse({ ok: true });
+}
+
+// Fase 2: admin laadt een Users-Excel op (kolommen USER/PW/ROLE, client-side
+// al genormaliseerd naar {username, password, role}) om accounts toe te
+// voegen of bij te werken zonder wrangler-commando's. Upsert per username:
+// bestaande gebruikers die niet in het bestand voorkomen blijven ongewijzigd
+// (geen volledige vervanging van alle user:* records in de KV).
+async function handleAdminUpsertUsers(body, env) {
+  if (!env.PASSWORD_PEPPER) {
+    return jsonResponse({ error: 'PASSWORD_PEPPER ontbreekt (wrangler secret put PASSWORD_PEPPER).' }, 500);
+  }
+  const users = Array.isArray(body.users) ? body.users : [];
+  if (!users.length) {
+    return jsonResponse({ error: 'Geen gebruikers ontvangen.' }, 400);
+  }
+
+  let updated = 0;
+  const errors = [];
+  for (const raw of users) {
+    const username = (raw.username || '').trim();
+    const password = (raw.password || '').trim();
+    const role = (raw.role || '').trim().toLowerCase();
+    if (!username || !password) {
+      errors.push(`${username || '(geen gebruikersnaam)'}: gebruikersnaam of wachtwoord ontbreekt — overgeslagen.`);
+      continue;
+    }
+    if (role !== 'admin' && role !== 'user') {
+      errors.push(`${username}: onbekende rol "${raw.role || ''}" (verwacht admin of user) — overgeslagen.`);
+      continue;
+    }
+    try {
+      const passwordHash = await sha256Hex(password + env.PASSWORD_PEPPER);
+      await env.FEEDBACKLOOP_KV.put(`user:${username}`, JSON.stringify({ username, passwordHash, role }));
+      updated++;
+    } catch (err) {
+      errors.push(`${username}: ${err.message}`);
+    }
+  }
+
+  return jsonResponse({ updated, total: users.length, errors });
 }
 
 function corsHeaders() {

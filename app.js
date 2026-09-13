@@ -309,6 +309,7 @@ const usersStatus = document.getElementById('usersStatus');
 const cacheCard = document.getElementById('cacheCard');
 const cacheResetBtn = document.getElementById('cacheResetBtn');
 const cacheStatus = document.getElementById('cacheStatus');
+const cacheStats = document.getElementById('cacheStats');
 const usersBody = document.getElementById('usersBody');
 const usersToggle = document.getElementById('usersToggle');
 const usersSummary = document.getElementById('usersSummary');
@@ -349,6 +350,8 @@ function showApp(username, role) {
   userViewCard.hidden = true;
   if (!isAdmin) {
     loadUserView();
+  } else {
+    loadCacheStats();
   }
 }
 
@@ -646,6 +649,34 @@ usersUpdateBtn.addEventListener('click', async () => {
 // gebruikersaccounts/sessies (user:*/session:*) blijven behouden — de
 // Worker (mode cache_reset) zorgt daarvoor.
 // ============================================================
+const CACHE_STATS_REGIO_ORDER = ['BE', 'FR', 'EX'];
+
+async function loadCacheStats() {
+  cacheStats.textContent = 'Cache-inhoud wordt geladen...';
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'cached_options' });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      cacheStats.textContent = 'Kon cache-inhoud niet ophalen: ' + ((data && data.error) || 'onbekende fout') + '.';
+      return;
+    }
+    const counts = data.regioCounts || {};
+    const knownRegios = CACHE_STATS_REGIO_ORDER.filter((r) => r in counts);
+    const otherRegios = Object.keys(counts).filter((r) => !CACHE_STATS_REGIO_ORDER.includes(r));
+    const parts = [...knownRegios, ...otherRegios.sort()].map((r) => `${r}: ${counts[r]}`);
+    if (!parts.length) {
+      cacheStats.textContent = 'Cache is momenteel leeg (0 gecachete opmerkingen).';
+      return;
+    }
+    cacheStats.textContent = `Gecachet per regio — ${parts.join(' · ')} (totaal: ${data.total} opmerking-categorie-combinaties).`;
+  } catch (err) {
+    cacheStats.textContent = 'Kon cache-inhoud niet ophalen: ' + err.message;
+  }
+}
+
 cacheResetBtn.addEventListener('click', async () => {
   if (!confirm('Volledige cache wissen? Bij de volgende analyse wordt alles opnieuw door de AI verwerkt. Gebruikersaccounts blijven behouden. Doorgaan?')) {
     return;
@@ -668,6 +699,7 @@ cacheResetBtn.addEventListener('click', async () => {
     cacheStatus.textContent = `Cache gewist (${data.deleted} entries).`;
     cacheStatus.className = 'status';
     cacheResetBtn.disabled = false;
+    loadCacheStats();
   } catch (err) {
     cacheStatus.textContent = 'Wissen mislukt: ' + err.message;
     cacheStatus.className = 'status err';
@@ -878,6 +910,7 @@ filterBtn.addEventListener('click', async () => {
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
   setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
   if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
+  loadCacheStats();
 });
 
 filterRegio.addEventListener('change', updateFilterStatus);

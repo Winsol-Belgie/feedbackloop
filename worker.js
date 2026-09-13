@@ -694,6 +694,7 @@ async function handleCachedOptions(env) {
   const regios = new Set();
   const reps = new Set();
   const klanten = new Set();
+  const regioCounts = {};
   let total = 0;
   let cursor;
   do {
@@ -701,7 +702,10 @@ async function handleCachedOptions(env) {
     for (const k of page.keys) {
       total++;
       const m = k.metadata || {};
-      if (m.regio) regios.add(m.regio);
+      if (m.regio) {
+        regios.add(m.regio);
+        regioCounts[m.regio] = (regioCounts[m.regio] || 0) + 1;
+      }
       if (m.rep) reps.add(m.rep);
       if (m.klant) klanten.add(m.klant);
     }
@@ -710,6 +714,8 @@ async function handleCachedOptions(env) {
 
   return jsonResponse({
     hasData: total > 0,
+    total,
+    regioCounts,
     regios: [...regios].sort((a, b) => a.localeCompare(b)),
     reps: [...reps].sort((a, b) => a.localeCompare(b)),
     klanten: [...klanten].sort((a, b) => a.localeCompare(b)),

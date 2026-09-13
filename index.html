@@ -312,6 +312,7 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
   <div class="card" id="cacheCard" hidden>
     <h2 class="part-title">Cache beheren</h2>
     <p class="part-sub">De AI-classificatie per opmerking wordt bij elke analyse bewaard in de cache (Workers KV), zodat een latere fase filters kan hergebruiken zonder alles opnieuw aan de AI te moeten voorleggen. Gebruik onderstaande knop enkel om de volledige cache leeg te maken (bv. bij twijfel over verouderde data) — gebruikersaccounts blijven behouden.</p>
+    <p class="status" id="cacheStats">Cache-inhoud wordt geladen...</p>
     <div class="row">
       <button class="btn danger" id="cacheResetBtn" type="button">Cache volledig wissen</button>
       <span class="status" id="cacheStatus"></span>
@@ -332,6 +333,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609131600"></script>
+<script src="app.js?v=202609131700"></script>
 </body>
 </html>

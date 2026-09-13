@@ -252,6 +252,12 @@ let cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
 // missingIds) — zodat we dat in de statusmelding kunnen tonen i.p.v. te
 // moeten gokken. Key = interne categoriesleutel (bv. "screens").
 let aiResponseIssues = {};
+// Verbruik + accountlimieten van Claude's API over één "Opladen"-run heen.
+// De rate-limit-headers zijn de enige manier om te zien of trage aanroepen aan
+// de inhoud liggen of gewoon aan de limiet van het Anthropic-account: als
+// "outputRemaining" op 0 staat, zit je tegen het plafond en helpt geen enkele
+// batch-/concurrency-instelling nog.
+let aiUsageStats = { inputTokens: 0, outputTokens: 0, calls: 0, limits: null, minOutputRemaining: null };
 
 // Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
 // classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
@@ -951,6 +957,7 @@ filterBtn.addEventListener('click', async () => {
   lastAgg = agg;
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
+  aiUsageStats = { inputTokens: 0, outputTokens: 0, calls: 0, limits: null, minOutputRemaining: null };
   const cats = Object.keys(CATEGORY_LABELS);
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
@@ -1027,10 +1034,26 @@ filterBtn.addEventListener('click', async () => {
     }
   }
   const aiNote = aiNotes.length ? ` Let op — onvolledig AI-antwoord voor: ${aiNotes.join('; ')}.` : '';
+  // AI-verbruik + accountlimiet tonen: zo is meteen zichtbaar of een trage run
+  // aan de hoeveelheid werk lag of aan de rate limit van het Anthropic-account.
+  let usageNote = '';
+  if (aiUsageStats.calls) {
+    const lim = aiUsageStats.limits || {};
+    const kosten = (aiUsageStats.inputTokens / 1e6) * 3 + (aiUsageStats.outputTokens / 1e6) * 15;
+    usageNote = ` AI-verbruik: ${aiUsageStats.calls} aanroep(en), ` +
+      `${aiUsageStats.inputTokens.toLocaleString('nl-BE')} input- en ` +
+      `${aiUsageStats.outputTokens.toLocaleString('nl-BE')} output-tokens (± $${kosten.toFixed(2)}).`;
+    if (lim.outputLimit) {
+      usageNote += ` Accountlimiet: ${Number(lim.outputLimit).toLocaleString('nl-BE')} output-tokens/min` +
+        (aiUsageStats.minOutputRemaining !== null
+          ? `, laagste resterend tijdens deze run: ${aiUsageStats.minOutputRemaining.toLocaleString('nl-BE')}`
+          : '') + '.';
+    }
+  }
   if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}`, true);
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${usageNote}`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}`, !!cacheNote || !!aiNote);
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}${usageNote}`, !!cacheNote || !!aiNote);
   }
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
@@ -1486,6 +1509,19 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     aiResponseIssues[cat].missingIds += d.missingIds || 0;
     aiResponseIssues[cat].totalIds += d.totalIds || 0;
     if (d.stopReason && d.stopReason !== 'tool_use') aiResponseIssues[cat].stopReasons.add(d.stopReason);
+  }
+  if (data.diagnostics) {
+    const d = data.diagnostics;
+    aiUsageStats.calls++;
+    aiUsageStats.inputTokens += d.inputTokens || 0;
+    aiUsageStats.outputTokens += d.outputTokens || 0;
+    if (d.rateLimits) {
+      aiUsageStats.limits = d.rateLimits;
+      const rem = parseInt(d.rateLimits.outputRemaining, 10);
+      if (!Number.isNaN(rem) && (aiUsageStats.minOutputRemaining === null || rem < aiUsageStats.minOutputRemaining)) {
+        aiUsageStats.minOutputRemaining = rem;
+      }
+    }
   }
   return data.analysis;
 }

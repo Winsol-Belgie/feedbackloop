@@ -338,9 +338,24 @@ export default {
         clearTimeout(timeoutId);
       }
 
+      // Anthropic stuurt bij elk antwoord (ook bij fouten) de actuele
+      // rate-limits mee. Zonder die cijfers is niet te zien of een trage
+      // aanroep aan de inhoud ligt of gewoon aan de accountlimiet — precies
+      // de vraag waar we 13/09 een halve dag op zijn blijven gokken. We geven
+      // ze mee terug naar de client i.p.v. ze enkel te loggen.
+      const rateLimits = {
+        requestsRemaining: apiRes.headers.get('anthropic-ratelimit-requests-remaining') || '',
+        requestsLimit: apiRes.headers.get('anthropic-ratelimit-requests-limit') || '',
+        inputRemaining: apiRes.headers.get('anthropic-ratelimit-input-tokens-remaining') || '',
+        inputLimit: apiRes.headers.get('anthropic-ratelimit-input-tokens-limit') || '',
+        outputRemaining: apiRes.headers.get('anthropic-ratelimit-output-tokens-remaining') || '',
+        outputLimit: apiRes.headers.get('anthropic-ratelimit-output-tokens-limit') || '',
+        retryAfter: apiRes.headers.get('retry-after') || '',
+      };
+
       if (!apiRes.ok) {
         const errText = await apiRes.text();
-        return jsonResponse({ error: `Claude API fout (${apiRes.status}): ${errText}` }, 502);
+        return jsonResponse({ error: `Claude API fout (${apiRes.status}): ${errText}`, rateLimits }, 502);
       }
 
       const data = await apiRes.json();
@@ -456,7 +471,14 @@ export default {
         category,
         analysis: toolUse.input,
         cache: { attempted: cacheWrites.length, succeeded: cacheSucceeded, failed: cacheFailed, firstError: cacheFirstError },
-        diagnostics: { stopReason, missingIds: missingIds.length, totalIds: existingFmt.ids.length },
+        diagnostics: {
+          stopReason,
+          missingIds: missingIds.length,
+          totalIds: existingFmt.ids.length,
+          inputTokens: data.usage?.input_tokens || 0,
+          outputTokens: data.usage?.output_tokens || 0,
+          rateLimits,
+        },
       });
     } catch (err) {
       return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);

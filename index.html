@@ -260,16 +260,22 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
   </div>
 
   <div class="card" id="usersCard" hidden>
-    <h2 class="part-title">Gebruikers beheren</h2>
-    <p class="part-sub">Upload een Excel met kolommen USER, PW en ROLE (admin of user) om gebruikers toe te voegen of bij te werken. Bestaande gebruikers die niet in het bestand staan, blijven ongewijzigd.</p>
-    <div class="dropzone" id="usersDropzone">
-      <p><strong>Sleep het Users-Excel hierheen</strong> of klik om te bladeren</p>
-      <p class="fname" id="usersFname">Geen bestand gekozen</p>
-      <input type="file" id="usersFileInput" accept=".xlsx,.xls,.csv" hidden>
+    <div class="card-head">
+      <p class="collapse-summary" id="usersSummary" hidden></p>
+      <button class="collapse-toggle" id="usersToggle" type="button" aria-expanded="true" aria-controls="usersBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
     </div>
-    <div class="row">
-      <button class="btn" id="usersUpdateBtn" disabled>Users bijwerken</button>
-      <span class="status" id="usersStatus"></span>
+    <div id="usersBody">
+      <h2 class="part-title">Gebruikers beheren</h2>
+      <p class="part-sub">Upload een Excel met kolommen USER, PW en ROLE (admin of user) om gebruikers toe te voegen of bij te werken. Bestaande gebruikers die niet in het bestand staan, blijven ongewijzigd.</p>
+      <div class="dropzone" id="usersDropzone">
+        <p><strong>Sleep het Users-Excel hierheen</strong> of klik om te bladeren</p>
+        <p class="fname" id="usersFname">Geen bestand gekozen</p>
+        <input type="file" id="usersFileInput" accept=".xlsx,.xls,.csv" hidden>
+      </div>
+      <div class="row">
+        <button class="btn" id="usersUpdateBtn" disabled>Users bijwerken</button>
+        <span class="status" id="usersStatus"></span>
+      </div>
     </div>
   </div>
 
@@ -287,6 +293,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609130940"></script>
+<script src="app.js?v=202609130950"></script>
 </body>
 </html>

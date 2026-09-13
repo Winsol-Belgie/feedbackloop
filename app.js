@@ -293,6 +293,9 @@ const usersFileInput = document.getElementById('usersFileInput');
 const usersFname = document.getElementById('usersFname');
 const usersUpdateBtn = document.getElementById('usersUpdateBtn');
 const usersStatus = document.getElementById('usersStatus');
+const usersBody = document.getElementById('usersBody');
+const usersToggle = document.getElementById('usersToggle');
+const usersSummary = document.getElementById('usersSummary');
 
 async function authRequest(bodyObj) {
   const res = await fetch(ANALYZE_URL, {
@@ -532,6 +535,7 @@ async function handleUsersFile(file) {
   setUsersStatus('Bestand inlezen...');
   usersUpdateBtn.disabled = true;
   parsedUserRows = [];
+  setCollapsed(usersBody, usersToggle, usersSummary, false);
   let parsed;
   try {
     parsed = await readFileRows(file);
@@ -574,6 +578,11 @@ usersUpdateBtn.addEventListener('click', async () => {
     if (data.errors && data.errors.length) msg += ` Fouten: ${data.errors.join('; ')}`;
     setUsersStatus(msg, !!(data.errors && data.errors.length));
     usersUpdateBtn.disabled = false;
+    // Bij succes (geen fouten) inklappen, net als de upload-kaart na een
+    // geslaagde filter — bespaart plaats, samenvatting blijft zichtbaar.
+    if (!(data.errors && data.errors.length)) {
+      setCollapsed(usersBody, usersToggle, usersSummary, true, usersSummaryText());
+    }
   } catch (err) {
     setUsersStatus('Bijwerken mislukt: ' + err.message, true);
     usersUpdateBtn.disabled = false;
@@ -738,11 +747,19 @@ function filterSummaryText() {
   return `Filter: ${repLabel} · ${klantLabel}${filterStatus.textContent ? ' — ' + filterStatus.textContent : ''}`;
 }
 
+function usersSummaryText() {
+  const base = usersFname.textContent || 'Geen bestand gekozen';
+  return usersStatus.textContent ? `${base} — ${usersStatus.textContent}` : base;
+}
+
 uploadToggle.addEventListener('click', () => {
   setCollapsed(uploadBody, uploadToggle, uploadSummary, !uploadBody.hidden, uploadSummaryText());
 });
 filterToggle.addEventListener('click', () => {
   setCollapsed(filterBody, filterToggle, filterSummary, !filterBody.hidden, filterSummaryText());
+});
+usersToggle.addEventListener('click', () => {
+  setCollapsed(usersBody, usersToggle, usersSummary, !usersBody.hidden, usersSummaryText());
 });
 
 function parsePotential(str) {

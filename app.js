@@ -205,6 +205,12 @@ const BATCH_SIZE = 60;
 // Cloudflare-quotum) meteen zichtbaar is in de UI i.p.v. enkel in
 // Worker-logs ("wrangler tail").
 let cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
+// Diagnose (i.o.v. Gwenn): Screens/Home tonen herhaaldelijk 0 bruikbare
+// signalen, ook meteen na "Opladen". Verzamelt per categorie of de AI een
+// onvolledig/afgekapt antwoord gaf (zie worker.js: diagnostics.stopReason/
+// missingIds) — zodat we dat in de statusmelding kunnen tonen i.p.v. te
+// moeten gokken. Key = interne categoriesleutel (bv. "screens").
+let aiResponseIssues = {};
 
 // Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
 // classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
@@ -903,6 +909,7 @@ filterBtn.addEventListener('click', async () => {
   const agg = buildAggregation(parsedRows);
   lastAgg = agg;
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
+  aiResponseIssues = {};
   const cats = Object.keys(CATEGORY_LABELS);
   showProgress(0, cats.length);
   setStatus('Analyse loopt...');
@@ -958,10 +965,25 @@ filterBtn.addEventListener('click', async () => {
   } else {
     cacheNote = ' Let op: er werd niets in de cache weggeschreven — "Filteren" zal leeg blijven tot een nieuwe "Opladen".';
   }
+  // Diagnose (i.o.v. Gwenn): laat zien of de AI voor een categorie geen
+  // (volledige) customer_sentiments-lijst teruggaf — bv. door de
+  // max_tokens-limiet (stop_reason "max_tokens") of een ander onvolledig
+  // antwoord. Dit is precies het soort probleem dat Screens/Home
+  // herhaaldelijk als "0 signalen" liet tonen, zonder dat "Opladen" zelf
+  // faalde (missingIds/stop_reason werden voorheen enkel gelogd, nooit
+  // getoond — zie worker.js).
+  const aiNotes = [];
+  for (const [cat, info] of Object.entries(aiResponseIssues)) {
+    if (info.missingIds > 0 || info.stopReasons.size) {
+      const reasonTxt = info.stopReasons.size ? ` (stop_reason: ${[...info.stopReasons].join(', ')})` : '';
+      aiNotes.push(`${CATEGORY_LABELS[cat]}: ${info.missingIds}/${info.totalIds} opmerking(en) zonder classificatie${reasonTxt}`);
+    }
+  }
+  const aiNote = aiNotes.length ? ` Let op — onvolledig AI-antwoord voor: ${aiNotes.join('; ')}.` : '';
   if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}`, true);
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}`, !!cacheNote);
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}`, !!cacheNote || !!aiNote);
   }
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
@@ -1410,6 +1432,13 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     if (data.cache.failed && !cacheWriteStats.firstError) {
       cacheWriteStats.firstError = data.cache.firstError || '';
     }
+  }
+  if (data.diagnostics && data.diagnostics.totalIds) {
+    const d = data.diagnostics;
+    if (!aiResponseIssues[cat]) aiResponseIssues[cat] = { missingIds: 0, totalIds: 0, stopReasons: new Set() };
+    aiResponseIssues[cat].missingIds += d.missingIds || 0;
+    aiResponseIssues[cat].totalIds += d.totalIds || 0;
+    if (d.stopReason && d.stopReason !== 'tool_use') aiResponseIssues[cat].stopReasons.add(d.stopReason);
   }
   return data.analysis;
 }

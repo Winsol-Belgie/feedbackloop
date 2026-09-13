@@ -323,8 +323,16 @@ export default {
       // krijgen), dus daar geldt geen gelijkaardige check.
       const gotIds = new Set((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => s.id));
       const missingIds = existingFmt.ids.filter((id) => !gotIds.has(id));
+      // Diagnose (i.o.v. Gwenn): "Screens" en "Home" kwamen herhaaldelijk
+      // met 0 bruikbare customer_sentiments terug, ook bij een verse
+      // "Opladen" (dus geen cache-kwestie). missingIds/stop_reason werden
+      // hier al berekend maar enkel gelogd via console.warn — onzichtbaar
+      // zonder "wrangler tail". Voortaan ook teruggegeven in de respons,
+      // zodat de client dit kan tonen i.p.v. dat we blind moeten gokken
+      // (bv. of het antwoord werd afgekapt door de max_tokens-limiet).
+      const stopReason = data.stop_reason || '';
       if (missingIds.length) {
-        console.warn(`[${category}] customer_sentiments mist ${missingIds.length}/${existingFmt.ids.length} id(s): ${missingIds.join(', ')}`);
+        console.warn(`[${category}] customer_sentiments mist ${missingIds.length}/${existingFmt.ids.length} id(s) (stop_reason: ${stopReason}): ${missingIds.join(', ')}`);
       }
 
       // Fase 4: per-opmerking classificatie cachen in KV, zodat een latere
@@ -399,6 +407,7 @@ export default {
         category,
         analysis: toolUse.input,
         cache: { attempted: cacheWrites.length, succeeded: cacheSucceeded, failed: cacheFailed, firstError: cacheFirstError },
+        diagnostics: { stopReason, missingIds: missingIds.length, totalIds: existingFmt.ids.length },
       });
     } catch (err) {
       return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);

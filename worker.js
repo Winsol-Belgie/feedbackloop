@@ -302,22 +302,43 @@ export default {
     const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
 
     try {
-      const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 8192,
-          temperature: 0,
-          tools: [ANALYSIS_TOOL],
-          tool_choice: { type: 'tool', name: 'submit_analysis' },
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
+      // Zonder timeout kan een trage/hangende Claude-aanroep de hele
+      // request onbeperkt laten wachten — de client heeft dan geen enkel
+      // signaal (geen foutmelding, geen retry) en "Opladen"/"Filteren"
+      // lijkt voor altijd vast te lopen op "X/7 categorieën verwerkt".
+      // Na ANALYZE_TIMEOUT_MS geven we zelf op met een nette 5xx, zodat de
+      // client (fetchAnalysisBatch in app.js) dat als tijdelijke fout
+      // herkent en automatisch een nieuwe poging doet.
+      const ANALYZE_TIMEOUT_MS = 90000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
+      let apiRes;
+      try {
+        apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 8192,
+            temperature: 0,
+            tools: [ANALYSIS_TOOL],
+            tool_choice: { type: 'tool', name: 'submit_analysis' },
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: controller.signal,
+        });
+      } catch (fetchErr) {
+        if (fetchErr.name === 'AbortError') {
+          return jsonResponse({ error: `Claude API timeout na ${ANALYZE_TIMEOUT_MS / 1000}s (categorie: ${category}).` }, 504);
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!apiRes.ok) {
         const errText = await apiRes.text();

@@ -170,6 +170,13 @@ const POTENTIAL_MIDPOINTS = {
 // (zie analyzeCategory) — zo gaat geen enkele klant verloren, ook niet bij
 // grote gecombineerde datasets (meerdere Excel-bestanden).
 const BATCH_SIZE = 60;
+// Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
+// veel per-opmerking cache-writes de Worker heeft geprobeerd/gehaald — zie
+// fetchAnalysisBatch. Wordt bij elke "Opladen"-klik gereset en nadien in de
+// statusmelding getoond, zodat een stille cache-schrijffout (bv. door een
+// Cloudflare-quotum) meteen zichtbaar is in de UI i.p.v. enkel in
+// Worker-logs ("wrangler tail").
+let cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
 
 // Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
 // classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
@@ -859,6 +866,7 @@ filterBtn.addEventListener('click', async () => {
 
   const agg = buildAggregation(parsedRows);
   lastAgg = agg;
+  cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   const cats = Object.keys(CATEGORY_LABELS);
   showProgress(0, cats.length);
   setStatus('Analyse loopt...');
@@ -901,10 +909,23 @@ filterBtn.addEventListener('click', async () => {
   renderResults(agg, aiCategories, globalOverview);
   hideProgress();
 
-  if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
+  // Cache-schrijffouten mogen de analyse zelf niet blokkeren (zie
+  // fetchAnalysisBatch), maar moeten wél zichtbaar zijn — anders lijkt
+  // "Opladen" geslaagd terwijl "Filteren" nadien niets (compleets) toont.
+  let cacheNote = '';
+  if (cacheWriteStats.attempted) {
+    if (cacheWriteStats.failed) {
+      cacheNote = ` Let op: cache-opslag mislukte voor ${cacheWriteStats.failed}/${cacheWriteStats.attempted} opmerking(en)` +
+        (cacheWriteStats.firstError ? ` (${cacheWriteStats.firstError})` : '') +
+        ' — "Filteren" zal daardoor onvolledig zijn tot een nieuwe "Opladen".';
+    }
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.`);
+    cacheNote = ' Let op: er werd niets in de cache weggeschreven — "Filteren" zal leeg blijven tot een nieuwe "Opladen".';
+  }
+  if (failed.length) {
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}`, true);
+  } else {
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}`, !!cacheNote);
   }
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
@@ -1308,6 +1329,14 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
   }
   const data = await res.json();
+  if (data.cache) {
+    cacheWriteStats.attempted += data.cache.attempted || 0;
+    cacheWriteStats.succeeded += data.cache.succeeded || 0;
+    cacheWriteStats.failed += data.cache.failed || 0;
+    if (data.cache.failed && !cacheWriteStats.firstError) {
+      cacheWriteStats.firstError = data.cache.firstError || '';
+    }
+  }
   return data.analysis;
 }
 

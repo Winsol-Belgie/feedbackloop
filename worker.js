@@ -93,6 +93,21 @@ const DOMAIN_KEYS = Object.keys(TOPIC_TAXONOMY);
 // de gecachete weergave (Fase 5) altijd een consistente vorm te laten
 // teruggeven, ook voor een categorie zonder enige gecachete opmerking.
 const CATEGORY_KEYS = ['screens', 'shutters', 'fusion', 'awnings', 'pergola', 'outdoor', 'home'];
+// De client stuurt de categorie als leesbaar label mee (CATEGORY_LABELS in
+// app.js, bv. "Outdoor"), omdat dat label ook in de AI-prompt gebruikt
+// wordt. Voor de cache (Fase 4/5) hebben we net de interne sleutel nodig
+// (CATEGORY_KEYS hierboven, bv. "outdoor") — anders matcht handleCachedResults
+// nooit iets (rec.category zou dan altijd het label zijn, nooit de sleutel
+// waarop hieronder geïndexeerd wordt). Vandaar deze omzetting.
+const LABEL_TO_KEY = {
+  Screens: 'screens',
+  Rolluiken: 'shutters',
+  Fusion: 'fusion',
+  Luifels: 'awnings',
+  Pergola: 'pergola',
+  Outdoor: 'outdoor',
+  Home: 'home',
+};
 const TOPIC_KEYS = DOMAIN_KEYS.flatMap((d) => Object.keys(TOPIC_TAXONOMY[d].topics));
 
 const ANALYSIS_TOOL = {
@@ -325,13 +340,14 @@ export default {
         if (!tagsById.has(t.id)) tagsById.set(t.id, []);
         tagsById.get(t.id).push({ domain: t.domain, topic: t.topic, sentiment: t.sentiment, detail: t.detail, competitor: t.competitor || '' });
       }
+      const categoryKey = LABEL_TO_KEY[category] || category;
       const cacheWrites = [];
       existing.remarks.forEach((r, i) => {
         if (!r.key || !r.sourceFile) return; // ontbrekende Fase 4-velden — niet cachen
         const id = existingFmt.ids[i];
         const sentimentEntry = sentimentsById.get(id);
         const record = {
-          category,
+          category: categoryKey,
           sourceFile: r.sourceFile,
           key: r.key,
           klant: r.name,
@@ -350,23 +366,40 @@ export default {
         // cached_options/cached_results (zie hieronder) op regio/rep/klant
         // filteren zonder duizenden losse KV.get()'s te doen.
         cacheWrites.push(
-          env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${category}:${r.key}`, JSON.stringify(record), {
-            metadata: { category, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '' },
+          env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${categoryKey}:${r.key}`, JSON.stringify(record), {
+            metadata: { category: categoryKey, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '' },
           })
         );
       });
+      // Fase 4-bugfix: Promise.all zou bij de eerste mislukte put meteen
+      // verwerpen en enkel die ene foutmelding loggen (console.warn, enkel
+      // zichtbaar via "wrangler tail") — zonder dat de client ooit te zien
+      // kreeg hoeveel writes er echt gelukt zijn. Promise.allSettled telt
+      // gelukte/mislukte writes en geeft dat mee terug in de response, zodat
+      // dit in de UI zichtbaar is i.p.v. enkel in Worker-logs.
+      let cacheSucceeded = 0;
+      let cacheFailed = 0;
+      let cacheFirstError = '';
       if (cacheWrites.length) {
-        try {
-          await Promise.all(cacheWrites);
-        } catch (cacheErr) {
-          // Cache-fout mag de analyse zelf niet blokkeren — het resultaat is
-          // nog altijd bruikbaar, enkel het latere hergebruik-uit-cache zou
-          // dit dan gewoon opnieuw aan de AI voorleggen.
-          console.warn(`[${category}] cache-schrijffout: ${cacheErr.message}`);
+        const settled = await Promise.allSettled(cacheWrites);
+        for (const s of settled) {
+          if (s.status === 'fulfilled') {
+            cacheSucceeded++;
+          } else {
+            cacheFailed++;
+            if (!cacheFirstError) cacheFirstError = s.reason && s.reason.message ? s.reason.message : String(s.reason);
+          }
+        }
+        if (cacheFailed) {
+          console.warn(`[${category}] cache-schrijffout op ${cacheFailed}/${cacheWrites.length} entries: ${cacheFirstError}`);
         }
       }
 
-      return jsonResponse({ category, analysis: toolUse.input });
+      return jsonResponse({
+        category,
+        analysis: toolUse.input,
+        cache: { attempted: cacheWrites.length, succeeded: cacheSucceeded, failed: cacheFailed, firstError: cacheFirstError },
+      });
     } catch (err) {
       return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
     }

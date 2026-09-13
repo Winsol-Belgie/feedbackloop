@@ -1279,7 +1279,10 @@ function renderTopicBlock(topicLabel, bucket, cat, part, barType) {
   const bar = barType === 'wish' ? renderWishBar(bucket.entries) : renderSentimentBar(bucket.entries);
   // Voorbeeld-teksten ("detail") horen bij één specifieke klant (zelfde
   // topic_tag-entry) — koppel ze daarom aan die klant i.p.v. los boven de
-  // klantenlijst te tonen. Per klant max. 2 unieke voorbeelden.
+  // klantenlijst te tonen. Alle unieke voorbeelden per klant tonen (geen
+  // cap meer) zodat het aantal zichtbare voorbeelden aansluit bij het
+  // aantal segmenten in de sentiment-/wish-balk hierboven (die telt elke
+  // afzonderlijke tag, niet enkel de unieke tekst).
   const detailsByCustomer = new Map();
   for (const e of bucket.entries) {
     if (!e.customer || !e.detail) continue;
@@ -1289,7 +1292,7 @@ function renderTopicBlock(topicLabel, bucket, cat, part, barType) {
   }
   const customerItems = names
     .map((n) => {
-      const details = (detailsByCustomer.get(n) || []).slice(0, 2);
+      const details = detailsByCustomer.get(n) || [];
       const detailsHtml = details.length
         ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
         : '';

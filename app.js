@@ -243,6 +243,7 @@ const fileInput = document.getElementById('fileInput');
 const fname = document.getElementById('fname');
 const filterBtn = document.getElementById('filterBtn');
 const filterCard = document.getElementById('filterCard');
+const filterRegio = document.getElementById('filterRegio');
 const filterRep = document.getElementById('filterRep');
 const filterKlant = document.getElementById('filterKlant');
 const filterKlantList = document.getElementById('filterKlantList');
@@ -453,6 +454,13 @@ function readFileRows(file) {
   });
 }
 
+// Fase 3: regio (BE/FR/EX) wordt afgeleid uit de bestandsnaam, bv.
+// "history_BE_09-2026.xls" (regio + maand-jaar). Bij één foute
+// bestandsnaam wordt de HELE batch geweigerd (geen gedeeltelijke
+// verwerking) — expliciete afspraak met Gwenn, zodat er nooit rijen zonder
+// (of met een verkeerde) regio in de resultaten kunnen sluipen.
+const FILENAME_REGION_RE = /^history_(BE|FR|EX)_\d{2}-\d{4}\.(xlsx?|csv)$/i;
+
 // Verwerkt één of meerdere geselecteerde/gesleepte bestanden: elk apart
 // inlezen, samenvoegen tot één rijenlijst, en dubbele rapporten eruit
 // filteren (bv. wanneer twee maandexports elkaar in datum overlappen) — zie
@@ -462,12 +470,34 @@ async function handleFiles(fileList) {
   const files = Array.from(fileList);
   if (!files.length) return;
   fname.textContent = files.length === 1 ? files[0].name : `${files.length} bestanden: ${files.map((f) => f.name).join(', ')}`;
+
+  // Bestandsnamen eerst valideren, vóór er iets ingelezen wordt: bij één
+  // foute naam wordt niets verwerkt.
+  const regionByFile = new Map();
+  const badNames = [];
+  for (const f of files) {
+    const m = f.name.match(FILENAME_REGION_RE);
+    if (m) regionByFile.set(f.name, m[1].toUpperCase());
+    else badNames.push(f.name);
+  }
+  if (badNames.length) {
+    setStatus(
+      `Bestandsnaam voldoet niet aan het verwachte formaat "history_BE|FR|EX_MM-JJJJ.xls(x)": ${badNames.join(', ')}. Er is niets verwerkt.`,
+      true
+    );
+    setAnalyzeStatus('');
+    filterCard.hidden = true;
+    filterBtn.disabled = true;
+    analyzeBtn.disabled = true;
+    return;
+  }
+
   setStatus('Bestand(en) inlezen...');
   setAnalyzeStatus('');
   setCollapsed(uploadBody, uploadToggle, uploadSummary, false);
   // Nieuwe bestand(en): stap 1 (filter) moet opnieuw doorlopen worden voor
   // er geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
-  // (klant/rep uit een vorige upload) stilzwijgend blijft hangen.
+  // (klant/rep/regio uit een vorige upload) stilzwijgend blijft hangen.
   filterCard.hidden = true;
   filterBtn.disabled = true;
   analyzeBtn.disabled = true;
@@ -486,7 +516,7 @@ async function handleFiles(fileList) {
     return;
   }
 
-  const combined = ok.flatMap((r) => r.rows);
+  const combined = ok.flatMap((r) => r.rows.map((row) => ({ ...row, regio: regionByFile.get(r.fileName) })));
   const { rows: deduped, removed } = dedupeRows(combined);
   parsedRows = deduped;
 
@@ -594,9 +624,11 @@ usersUpdateBtn.addEventListener('click', async () => {
 // (stap 2) gebeurt pas na een klik op "Analyseren", met de dan geldende
 // filterselectie.
 filterBtn.addEventListener('click', () => {
+  const regios = [...new Set(parsedRows.map((r) => r['regio']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const reps = [...new Set(parsedRows.map((r) => r['rep']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const klanten = [...new Set(parsedRows.map((r) => r['name']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
+  filterRegio.innerHTML = '<option value="">Alle</option>' + regios.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
   filterRep.innerHTML = '<option value="">Alle</option>' + reps.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
   filterKlantList.innerHTML = klanten.map((k) => `<option value="${escapeAttr(k)}"></option>`).join('');
   filterKlant.value = '';
@@ -610,17 +642,20 @@ filterBtn.addEventListener('click', () => {
   setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
 });
 
+filterRegio.addEventListener('change', updateFilterStatus);
 filterRep.addEventListener('change', updateFilterStatus);
 filterKlant.addEventListener('input', updateFilterStatus);
 
-// Rij voldoet aan filter1 (Sales Rep) EN filter2 (Klant) — een leeg filter
-// ("Alle") legt geen voorwaarde op. Klant is een vrij tekstveld (met
-// datalist-suggesties) maar moet, om als filter te gelden, exact overeen-
-// komen met een klantnaam uit de data — anders levert dat gewoon 0 rijen
-// op, zichtbaar via de live teller hieronder.
+// Rij voldoet aan filter Regio EN filter Sales Rep EN filter Klant — een
+// leeg filter ("Alle") legt geen voorwaarde op. Klant is een vrij
+// tekstveld (met datalist-suggesties) maar moet, om als filter te gelden,
+// exact overeenkomen met een klantnaam uit de data — anders levert dat
+// gewoon 0 rijen op, zichtbaar via de live teller hieronder.
 function matchesFilters(row) {
+  const regioVal = filterRegio.value;
   const repVal = filterRep.value;
   const klantVal = filterKlant.value.trim();
+  if (regioVal && row['regio'] !== regioVal) return false;
   if (repVal && row['rep'] !== repVal) return false;
   if (klantVal && row['name'] !== klantVal) return false;
   return true;
@@ -742,9 +777,10 @@ function uploadSummaryText() {
 }
 
 function filterSummaryText() {
+  const regioLabel = filterRegio.value || 'alle regio\'s';
   const repLabel = filterRep.value || 'alle reps';
   const klantLabel = filterKlant.value || 'alle klanten';
-  return `Filter: ${repLabel} · ${klantLabel}${filterStatus.textContent ? ' — ' + filterStatus.textContent : ''}`;
+  return `Filter: ${regioLabel} · ${repLabel} · ${klantLabel}${filterStatus.textContent ? ' — ' + filterStatus.textContent : ''}`;
 }
 
 function usersSummaryText() {

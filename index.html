@@ -218,6 +218,7 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
       <button class="collapse-toggle" id="uploadToggle" type="button" aria-expanded="true" aria-controls="uploadBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
     </div>
     <div id="uploadBody">
+      <p class="part-sub" style="margin-top:-6px;">Bestandsnaam moet de vorm "history_BE|FR|EX_MM-JJJJ.xls(x)" hebben (regio + maand-jaar), zodat de regio automatisch herkend wordt.</p>
       <div class="dropzone" id="dropzone">
         <p><strong>Sleep je Excel-bestanden hierheen</strong> of klik om te bladeren (meerdere bestanden mogen)</p>
         <p class="fname" id="fname">Geen bestand gekozen</p>
@@ -237,8 +238,12 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
     </div>
     <div id="filterBody">
       <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
-      <p class="part-sub">Optioneel: kies een sales rep en/of klant. Enkel rapporten die aan beide voorwaarden voldoen (EN, niet OF) tellen mee voor de analyse. Laat op "Alle" staan om niet te filteren.</p>
+      <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant. Enkel rapporten die aan alle voorwaarden voldoen (EN, niet OF) tellen mee voor de analyse. Laat op "Alle" staan om niet te filteren.</p>
       <div class="filter-row">
+        <label class="filter-field">
+          <span>Regio</span>
+          <select id="filterRegio"><option value="">Alle</option></select>
+        </label>
         <label class="filter-field">
           <span>Sales Rep</span>
           <select id="filterRep"><option value="">Alle</option></select>
@@ -293,6 +298,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609130950"></script>
+<script src="app.js?v=202609131010"></script>
 </body>
 </html>

@@ -220,23 +220,47 @@ const POTENTIAL_MIDPOINTS = {
 // dan de grote-batch-aanpak, want de trage stap (genereren) wordt dan echt
 // verdeeld i.p.v. geserialiseerd.
 const BATCH_SIZE = 12;
-const ANALYSIS_CONCURRENCY = 15;
+// Meting 13/09 (211 rijen): 22 aanroepen, 1m26s bij concurrency 15 — dus twee
+// "golven" van 15 en 7. Met 25 past een normale maand in één golf, wat de
+// tweede golf (~35s) uitspaart. Ruimte genoeg: van de 2.000.000
+// output-tokens/min van het account gebruikt een volledige run er ~34.000.
+const ANALYSIS_CONCURRENCY = 25;
+// De limiter start bewust met ÉÉN aanroep en laat de rest pas los zodra die
+// klaar is ("priming"). Reden: de vaste instructies gaan als gecachete
+// system-prompt mee (zie worker.js), maar die cache bestaat pas nadat één
+// aanroep ze heeft weggeschreven. Vertrekken alle aanroepen tegelijk, dan
+// schrijft élke aanroep zijn eigen kopie — aan 1,25x de normale prijs — en
+// leest niemand. Meting 13/09 liet precies dat zien: 58.245 tokens
+// weggeschreven tegenover 27.181 gelezen, netto geen besparing. Eén aanroep
+// vooruitsturen kost ~5 seconden en maakt de cache warm voor alle volgende.
 function createLimiter(concurrency) {
   let active = 0;
+  let started = 0;
+  let priming = true;
   const queue = [];
-  const runNext = () => {
-    if (active >= concurrency || queue.length === 0) return;
-    active++;
-    const { fn, resolve, reject } = queue.shift();
-    fn().then(resolve, reject).finally(() => {
-      active--;
-      runNext();
-    });
+  const pump = () => {
+    while (queue.length && active < concurrency && !(priming && started > 0)) {
+      active++;
+      started++;
+      const { fn, resolve, reject } = queue.shift();
+      fn().then(resolve, reject).finally(() => {
+        active--;
+        priming = false;
+        pump();
+      });
+    }
   };
-  return (fn) => new Promise((resolve, reject) => {
+  const limit = (fn) => new Promise((resolve, reject) => {
     queue.push({ fn, resolve, reject });
-    runNext();
+    pump();
   });
+  // Bij een nieuwe "Opladen" opnieuw primen: de prompt cache van Anthropic
+  // vervalt na een paar minuten, dus een volgende run begint weer koud.
+  limit.reset = () => {
+    started = 0;
+    priming = true;
+  };
+  return limit;
 }
 const limitAnalysisCall = createLimiter(ANALYSIS_CONCURRENCY);
 // Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
@@ -958,6 +982,7 @@ filterBtn.addEventListener('click', async () => {
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
   aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
+  limitAnalysisCall.reset();
   const cats = Object.keys(CATEGORY_LABELS);
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT

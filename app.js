@@ -1144,11 +1144,37 @@ function isExisting(row) {
 // de sleutel zelf: dat wordt in de Worker toegevoegd, want één opmerking
 // kan (met per-categorie gefilterde tekst) in meerdere categorieën
 // terechtkomen.
+// Kleine, deterministische 32-bit FNV-1a-variant (sync, geen Web Crypto
+// nodig). Twee onafhankelijke varianten (andere seed) samengevoegd geven
+// een 64-bit-achtige, vaste-lengte hex-sleutel — botsingen zijn voor deze
+// dataset (tienduizenden opmerkingen) praktisch verwaarloosbaar, en de
+// sleutel wordt nergens uitgelezen/geparsed, enkel als opaque identifier
+// gebruikt (zie r.key in worker.js).
+function hash32(str, seed) {
+  let h = seed >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0; // FNV-prime
+  }
+  return h >>> 0;
+}
+
+// Cache-sleutel per opmerking (klant + datum + tekst, genormaliseerd) —
+// gebruikt als deel van de KV-key in worker.js (remark:<bestand>:<cat>:<key>).
+// BUGFIX: eerder werd de genormaliseerde tekst hier ZELF als sleutel
+// gebruikt — bij een lange opmerking (of met veel meerbyte UTF-8-tekens)
+// overschreed de resulterende KV-key al snel Cloudflare's limiet van 512
+// bytes per key, waardoor die cache-write stil faalde ("KV PUT failed: ...
+// exceeds key length limit of 512"). Een hash geeft altijd een vaste,
+// korte lengte, ongeacht hoe lang de opmerking is.
 function remarkCacheKey(name, date, remark) {
   const n = (name || '').trim().toLowerCase();
   const d = (date || '').trim().toLowerCase();
   const s = (remark || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  return `${n}|${d}|${s}`;
+  const combined = `${n}|${d}|${s}`;
+  const h1 = hash32(combined, 0x811c9dc5);
+  const h2 = hash32(combined, 0x1000193 ^ combined.length);
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
 }
 
 function buildAggregation(rows) {

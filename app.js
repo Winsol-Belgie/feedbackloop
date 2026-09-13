@@ -911,6 +911,12 @@ filterBtn.addEventListener('click', async () => {
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
   const cats = Object.keys(CATEGORY_LABELS);
+  // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
+  // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
+  // de analyse start, anders update showProgress() een balk die nog
+  // verstopt zit en lijkt "Analyse loopt..." urenlang stil te staan.
+  filterCard.hidden = false;
+  setCollapsed(filterBody, filterToggle, filterSummary, false);
   showProgress(0, cats.length);
   setStatus('Analyse loopt...');
 

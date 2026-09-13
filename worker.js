@@ -118,8 +118,22 @@ const ANALYSIS_TOOL = {
     properties: {
       existing_customers: {
         type: 'object',
+        // Volgorde bewust NIET alfabetisch/oorspronkelijk: "customer_sentiments"
+        // staat hier eerst, vóór de vrije verhalende velden. Diagnose (i.o.v.
+        // Gwenn, na een reeks 3/5-maanden BE-tests): bij grote categorieën
+        // (bv. Home 83, Screens 39, Pergola 38 bestaande klanten) liep de AI
+        // tegen de max_tokens-limiet aan (stop_reason "max_tokens"), en het
+        // model genereert de velden in zowat de volgorde van dit schema. Met
+        // "general_impression" eerst ging het budget vaak op aan de
+        // verhalende tekst nog vóór de VERPLICHTE/UITPUTTENDE
+        // customer_sentiments-lijst (die de score bepaalt) aan bod kwam —
+        // bij de kleinste van de vier (Rolluiken, 33 klanten) kwam die lijst
+        // wél volledig binnen, ook al werd ook daar de max_tokens-limiet
+        // bereikt (verderop, dus na customer_sentiments). Door de
+        // score-kritische/verplichte velden hier eerst te zetten, valt bij
+        // afkapping enkel de al gracieus opgevangen verhalende tekst weg
+        // (general_impression/benchmark_*), niet de cijfers.
         properties: {
-          general_impression: { type: 'string', description: 'Narrative summary (NL) of how existing customers experience the product, positive and negative.' },
           customer_sentiments: {
             type: 'array',
             items: {
@@ -131,7 +145,7 @@ const ANALYSIS_TOOL = {
               },
               required: ['id', 'customer', 'sentiment'],
             },
-            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit is de basis voor de score-berekening in de tool.',
+            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit is de basis voor de score-berekening in de tool — genereer dit veld als EERSTE, vóór de andere velden van existing_customers.',
           },
           topic_tags: {
             type: 'array',
@@ -152,8 +166,9 @@ const ANALYSIS_TOOL = {
           },
           benchmark_product: { type: 'string', description: 'What customers say about specs/offering vs competitors.' },
           benchmark_price: { type: 'string', description: 'What customers say about pricing vs competitors.' },
+          general_impression: { type: 'string', description: 'Narrative summary (NL) of how existing customers experience the product, positive and negative. Genereer dit veld als LAATSTE van existing_customers.' },
         },
-        required: ['general_impression', 'customer_sentiments', 'topic_tags', 'benchmark_product', 'benchmark_price'],
+        required: ['customer_sentiments', 'topic_tags', 'benchmark_product', 'benchmark_price', 'general_impression'],
       },
       prospecting: {
         type: 'object',
@@ -296,7 +311,7 @@ export default {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 6000,
+          max_tokens: 8192,
           temperature: 0,
           tools: [ANALYSIS_TOOL],
           tool_choice: { type: 'tool', name: 'submit_analysis' },
@@ -436,15 +451,8 @@ function buildPrompt(category, existingText, existingIds, prospectingText, poten
     `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen tag, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
     'Geef een genuanceerde, feitelijke synthese in het Nederlands.',
     '',
-    '--- VASTE TAXONOMIE (topic_tags) ---',
-    'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
-    buildTaxonomyBlock(),
-    '',
-    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), de exacte klantnaam, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
-    'BELANGRIJK: verzin geen tag, klantnaam of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
-    '',
     '--- VERPLICHTE PER-OPMERKING CLASSIFICATIE (customer_sentiments) ---',
-    'Naast "topic_tags" geef je ook een apart veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen.',
+    'Geef als eerste veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Doe dit VOORDAT je aan "topic_tags" en de verhalende velden begint (zie hieronder) — bij een lange opmerkingenlijst kan het antwoord de lengtelimiet raken, en deze lijst bepaalt rechtstreeks de score, dus mag nooit ontbreken.',
     `De ids die je moet gebruiken zijn: ${existingIds.join(', ') || '(geen)'}.`,
     'Ken per id exact één sentiment toe uit: "positive", "negative", "neutral", "no_opinion" — met deze betekenis:',
     '- "positive": de klant uit expliciete tevredenheid, lof, of wil de samenwerking duidelijk voortzetten/uitbreiden (bv. "zeer tevreden over levering", "wil graag opnieuw bestellen").',
@@ -453,6 +461,13 @@ function buildPrompt(category, existingText, existingIds, prospectingText, poten
     '- "no_opinion": zuiver administratieve notitie zonder enig oordeel over product/dienst (bv. "bezoek afgelegd", "staal afgegeven", "offerte besproken", "nog niet opgestart").',
     'Bij twijfel: een opgeloste klacht zonder verdere negatieve toon → "neutral" (niet "negative"); een aanhoudende/onopgeloste klacht → "negative"; een zuiver informatieve/administratieve zin zonder klantoordeel → "no_opinion" (niet "neutral").',
     'Deze lijst bepaalt rechtstreeks de betrouwbaarheidsscore in de tool — sla dus geen enkel id over, ook niet wanneer het overduidelijk "no_opinion" is.',
+    '',
+    '--- VASTE TAXONOMIE (topic_tags) ---',
+    'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
+    buildTaxonomyBlock(),
+    '',
+    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), de exacte klantnaam, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
+    'BELANGRIJK: verzin geen tag, klantnaam of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie — daar valt geen tag uit te halen. Groepeer een onderwerp NIET breder dan de data draagt: als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, benoem dat expliciet in "general_impression" (bv. "De meeste opmerkingen hier zijn bezoeknotities zonder uitgesproken klantopinie; de feedback komt vrijwel volledig van klant Y.") in plaats van dat te laten lijken op een breed gedragen patroon.',
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',

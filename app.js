@@ -137,6 +137,20 @@ function matchesKeyword(text, word) {
   return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'i').test(text);
 }
 
+// Zelfde als matchesKeyword, maar zonder woordgrens aan de RECHTERkant —
+// nodig voor Nederlandse samenstellingen waarbij het trefwoord het eerste
+// deel van een langer woord is (bv. "screendoek", "screendoekvervanging"
+// bevatten "screen" niet als los woord, wel als voorvoegsel). Enkel gebruikt
+// voor trefwoorden in PREFIX_KEYWORDS hieronder — bewust niet toegepast op
+// alle trefwoorden, want voor korte/generieke woorden (bv. "tent", dat ook
+// in "potentieel" zit) zou dat net valse treffers opleveren. De linkerkant
+// blijft wel een echte woordgrens, dus "afscreenen" e.d. matcht nog steeds
+// niet als los ander woord toevallig op "screen" eindigt.
+function matchesKeywordPrefix(text, word) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escaped}`, 'i').test(text);
+}
+
 // "SO" (zonder "!") is dubbelzinniger dan "SO!" — in hoofdletters (SO) is
 // het vrijwel altijd het merk en telt het direct mee voor Pergola; in
 // kleine letters ("so") is het een courant los woord, dus die telt enkel
@@ -146,6 +160,17 @@ function matchesBareSO(text) {
   return matchesKeyword(text, 'so') && matchesKeyword(text, 'pergola');
 }
 
+// Trefwoorden die ook als voorvoegsel van een samengesteld woord mogen
+// matchen (matchesKeywordPrefix hierboven) — gevonden bij een analyse
+// (i.o.v. Gwenn) op 3 maanden BE-data: "screendoekvervanging" e.d. bleven
+// ongecategoriseerd omdat "screen" met de gewone woordgrens niet matcht op
+// een samenstelling. Bewust beperkt tot trefwoorden waar dit veilig is
+// (geen courant ander woord dat toevallig met dezelfde letters begint) —
+// dus niet zomaar uitgebreid naar alle KEYWORDS-trefwoorden hierboven.
+const PREFIX_KEYWORDS = {
+  screens: ['screen'],
+};
+
 // Welke categorieën komen voor in een los stukje tekst (op basis van de
 // trefwoorden) — gedeeld door classifyCategories (hele rij) en
 // filterRemarkForCategory (per zin, voor de AI-input).
@@ -153,6 +178,9 @@ function categoriesInText(text) {
   const cats = new Set();
   for (const cat of Object.keys(KEYWORDS)) {
     if (KEYWORDS[cat].some((w) => matchesKeyword(text, w))) cats.add(cat);
+  }
+  for (const cat of Object.keys(PREFIX_KEYWORDS)) {
+    if (PREFIX_KEYWORDS[cat].some((w) => matchesKeywordPrefix(text, w))) cats.add(cat);
   }
   if (matchesBareSO(text)) cats.add('pergola');
   return cats;
@@ -1132,7 +1160,19 @@ function isExisting(row) {
   if (status.includes('active customer')) return true;
   if (status.includes('to be contacted') || status.includes('not to be contacted')) return false;
   const reason = (row['reason'] || '').toLowerCase();
-  if (reason.includes('prospect') || reason.includes('follow up visit to potential')) return false;
+  // BUGFIX (analyse i.o.v. Gwenn op 3 maanden BE-data): "First visit to
+  // potential customer" is een eerste bezoek aan een PROSPECT — even
+  // duidelijk geen bestaande klant als "Follow up visit to potential
+  // customer" hieronder, maar ontbrak hier. Zonder deze regel werden 21
+  // van de 25 rijen met deze reden toch als "bestaande klant" meegeteld,
+  // in elke categorie.
+  if (
+    reason.includes('prospect') ||
+    reason.includes('follow up visit to potential') ||
+    reason.includes('first visit to potential')
+  ) {
+    return false;
+  }
   return true;
 }
 

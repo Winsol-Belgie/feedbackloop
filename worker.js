@@ -225,6 +225,15 @@ export default {
       return handleAdminUpsertUsers(body, env);
     }
 
+    // Fase 4: cache-beheer (per-opmerking AI-classificatie in KV) — ook
+    // geen AI-aanroep nodig.
+    if (body.mode === 'cache_invalidate_files') {
+      return handleCacheInvalidateFiles(body, env);
+    }
+    if (body.mode === 'cache_reset') {
+      return handleCacheReset(env);
+    }
+
     if (!env.ANTHROPIC_API_KEY) {
       return jsonResponse({ error: 'ANTHROPIC_API_KEY ontbreekt (wrangler secret put ANTHROPIC_API_KEY).' }, 500);
     }
@@ -286,6 +295,47 @@ export default {
       if (missingIds.length) {
         console.warn(`[${category}] customer_sentiments mist ${missingIds.length}/${existingFmt.ids.length} id(s): ${missingIds.join(', ')}`);
       }
+
+      // Fase 4: per-opmerking classificatie cachen in KV, zodat een latere
+      // fase filterwijzigingen kan her-aggregeren zonder nieuwe AI-aanroep.
+      // Enkel "bestaande klanten" (customer_sentiments/topic_tags zijn per
+      // opmerking-id) — prospecting blijft een categorie-brede synthese
+      // zonder per-id structuur en valt hier dus nog buiten. Sleutel =
+      // "key"/"sourceFile" die de client per opmerking meestuurt (zie
+      // remarkCacheKey in app.js); de Worker vertrouwt die verder gewoon.
+      const sentimentsById = new Map((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => [s.id, s]));
+      const tagsById = new Map();
+      for (const t of toolUse.input?.existing_customers?.topic_tags || []) {
+        if (!tagsById.has(t.id)) tagsById.set(t.id, []);
+        tagsById.get(t.id).push({ domain: t.domain, topic: t.topic, sentiment: t.sentiment, detail: t.detail, competitor: t.competitor || '' });
+      }
+      const cacheWrites = [];
+      existing.remarks.forEach((r, i) => {
+        if (!r.key || !r.sourceFile) return; // ontbrekende Fase 4-velden — niet cachen
+        const id = existingFmt.ids[i];
+        const sentimentEntry = sentimentsById.get(id);
+        const record = {
+          category,
+          sourceFile: r.sourceFile,
+          key: r.key,
+          klant: r.name,
+          sentiment: sentimentEntry ? sentimentEntry.sentiment : null,
+          tags: tagsById.get(id) || [],
+          storedAt: new Date().toISOString(),
+        };
+        cacheWrites.push(env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${category}:${r.key}`, JSON.stringify(record)));
+      });
+      if (cacheWrites.length) {
+        try {
+          await Promise.all(cacheWrites);
+        } catch (cacheErr) {
+          // Cache-fout mag de analyse zelf niet blokkeren — het resultaat is
+          // nog altijd bruikbaar, enkel het latere hergebruik-uit-cache zou
+          // dit dan gewoon opnieuw aan de AI voorleggen.
+          console.warn(`[${category}] cache-schrijffout: ${cacheErr.message}`);
+        }
+      }
+
       return jsonResponse({ category, analysis: toolUse.input });
     } catch (err) {
       return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
@@ -554,6 +604,54 @@ async function handleAdminUpsertUsers(body, env) {
   }
 
   return jsonResponse({ updated, total: users.length, errors });
+}
+
+// Haalt ALLE keys met een gegeven prefix op (KV.list() geeft max. 1000 per
+// aanroep terug, met een cursor voor de rest) en verwijdert ze. Gebruikt
+// door zowel de per-bestand invalidatie (Fase 4) als de volledige
+// cache-reset hieronder — enkel het verschil in prefix.
+async function deleteByPrefix(kv, prefix) {
+  let cursor;
+  let deleted = 0;
+  do {
+    const page = await kv.list({ prefix, cursor });
+    for (const k of page.keys) {
+      await kv.delete(k.name);
+      deleted++;
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return deleted;
+}
+
+// Fase 4: vóór een (her)analyse van de betrokken bestanden, worden hun
+// eerder gecachete per-opmerking-entries gewist — zo vervangt een
+// heropload met dezelfde bestandsnaam (bv. na een correctie) netjes de
+// oude classificatie i.p.v. ernaast te blijven bestaan. Wordt door de
+// client één keer aangeroepen vóór de volledige analyse-run start (niet
+// per categorie/batch), zodat latere batches elkaars net geschreven
+// entries voor hetzelfde bestand niet kunnen wegvegen.
+async function handleCacheInvalidateFiles(body, env) {
+  const files = Array.isArray(body.files) ? body.files.filter((f) => typeof f === 'string' && f) : [];
+  if (!files.length) {
+    return jsonResponse({ deleted: 0 });
+  }
+  let deleted = 0;
+  for (const file of files) {
+    deleted += await deleteByPrefix(env.FEEDBACKLOOP_KV, `remark:${file}:`);
+  }
+  return jsonResponse({ deleted });
+}
+
+// Wist de VOLLEDIGE analyse-cache (alle "remark:*"-entries) — niet de
+// volledige KV-namespace: user:*/session:*-entries (login/rollen, Fase 1)
+// blijven behouden, anders zou deze knop ook alle accounts en actieve
+// sessies wissen. Bewuste aanpassing t.o.v. de oorspronkelijke afspraak
+// ("reset knop wist de hele KV"), die dateert van vóór Fase 1 — toen zat
+// er nog niets anders dan analyse-data in de KV.
+async function handleCacheReset(env) {
+  const deleted = await deleteByPrefix(env.FEEDBACKLOOP_KV, 'remark:');
+  return jsonResponse({ deleted });
 }
 
 function corsHeaders() {

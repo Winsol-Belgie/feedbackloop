@@ -294,6 +294,9 @@ const usersFileInput = document.getElementById('usersFileInput');
 const usersFname = document.getElementById('usersFname');
 const usersUpdateBtn = document.getElementById('usersUpdateBtn');
 const usersStatus = document.getElementById('usersStatus');
+const cacheCard = document.getElementById('cacheCard');
+const cacheResetBtn = document.getElementById('cacheResetBtn');
+const cacheStatus = document.getElementById('cacheStatus');
 const usersBody = document.getElementById('usersBody');
 const usersToggle = document.getElementById('usersToggle');
 const usersSummary = document.getElementById('usersSummary');
@@ -328,6 +331,7 @@ function showApp(username, role) {
   uploadCard.hidden = !isAdmin;
   filterCard.hidden = true;
   usersCard.hidden = !isAdmin;
+  cacheCard.hidden = !isAdmin;
   userPlaceholderCard.hidden = isAdmin;
 }
 
@@ -516,7 +520,7 @@ async function handleFiles(fileList) {
     return;
   }
 
-  const combined = ok.flatMap((r) => r.rows.map((row) => ({ ...row, regio: regionByFile.get(r.fileName) })));
+  const combined = ok.flatMap((r) => r.rows.map((row) => ({ ...row, regio: regionByFile.get(r.fileName), sourceFile: r.fileName })));
   const { rows: deduped, removed } = dedupeRows(combined);
   parsedRows = deduped;
 
@@ -616,6 +620,41 @@ usersUpdateBtn.addEventListener('click', async () => {
   } catch (err) {
     setUsersStatus('Bijwerken mislukt: ' + err.message, true);
     usersUpdateBtn.disabled = false;
+  }
+});
+
+// ============================================================
+// Fase 4: Cache beheren (admin) — volledige cache (per-opmerking
+// AI-classificatie in Workers KV) wissen. Wist enkel "remark:*"-entries;
+// gebruikersaccounts/sessies (user:*/session:*) blijven behouden — de
+// Worker (mode cache_reset) zorgt daarvoor.
+// ============================================================
+cacheResetBtn.addEventListener('click', async () => {
+  if (!confirm('Volledige cache wissen? Bij de volgende analyse wordt alles opnieuw door de AI verwerkt. Gebruikersaccounts blijven behouden. Doorgaan?')) {
+    return;
+  }
+  cacheResetBtn.disabled = true;
+  cacheStatus.textContent = 'Bezig met wissen...';
+  cacheStatus.className = 'status';
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'cache_reset' });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      cacheStatus.textContent = (data && data.error) || 'Wissen mislukt.';
+      cacheStatus.className = 'status err';
+      cacheResetBtn.disabled = false;
+      return;
+    }
+    cacheStatus.textContent = `Cache gewist (${data.deleted} entries).`;
+    cacheStatus.className = 'status';
+    cacheResetBtn.disabled = false;
+  } catch (err) {
+    cacheStatus.textContent = 'Wissen mislukt: ' + err.message;
+    cacheStatus.className = 'status err';
+    cacheResetBtn.disabled = false;
   }
 });
 
@@ -843,6 +882,21 @@ function isExisting(row) {
   return true;
 }
 
+// Fase 4: stabiele cache-sleutel per opmerking (klant + datum + tekst),
+// zelfde principe als dedupeKey hierboven maar op de al samengevoegde
+// remark/re-tekst — dit is de sleutel waaronder de Worker de AI-classificatie
+// van deze opmerking in de KV-cache bewaart (zie cache_invalidate_files/
+// admin_upsert_users-achtige nieuwe modes in worker.js). Geen categorie in
+// de sleutel zelf: dat wordt in de Worker toegevoegd, want één opmerking
+// kan (met per-categorie gefilterde tekst) in meerdere categorieën
+// terechtkomen.
+function remarkCacheKey(name, date, remark) {
+  const n = (name || '').trim().toLowerCase();
+  const d = (date || '').trim().toLowerCase();
+  const s = (remark || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${n}|${d}|${s}`;
+}
+
 function buildAggregation(rows) {
   const cats = Object.keys(CATEGORY_LABELS);
   const agg = {};
@@ -860,6 +914,9 @@ function buildAggregation(rows) {
     // Bewaar genoeg van de brondata om nadien (bij het aanklikken van een
     // klantnaam) de originele rij te kunnen tonen — zie openCustomerModal.
     // "Rep" is de vertegenwoordiger; "User" als terugval indien leeg.
+    // "key"/"sourceFile" zijn nieuw (Fase 4): nodig om de AI-classificatie
+    // van deze opmerking in de Worker-KV te cachen en bij een heropload van
+    // hetzelfde bestand de oude cache-entries ervan te kunnen vervangen.
     const detail = {
       name,
       remark,
@@ -867,6 +924,8 @@ function buildAggregation(rows) {
       date: row['date'] || '',
       type: row['type'] || '',
       status: row['status'] || '',
+      key: remarkCacheKey(name, row['date'], remark),
+      sourceFile: row['sourceFile'] || '',
     };
     for (const cat of rowCats) {
       if (existing) {
@@ -927,7 +986,7 @@ function filterRemarkForCategory(remark, targetCat) {
 // het resultaat zelf in batches van max. BATCH_SIZE opmerkingen.
 function remarksForAi(customers, targetCat) {
   return customers
-    .map((c) => ({ name: c.name, remark: filterRemarkForCategory(c.remark, targetCat) }))
+    .map((c) => ({ name: c.name, remark: filterRemarkForCategory(c.remark, targetCat), key: c.key, sourceFile: c.sourceFile }))
     .filter((c) => c.remark);
 }
 
@@ -1073,6 +1132,29 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   const agg = buildAggregation(filteredRows);
   lastAgg = agg;
   const cats = Object.keys(CATEGORY_LABELS);
+
+  // Fase 4: vóór de analyse van start gaat, worden bestaande cache-entries
+  // van de betrokken bronbestanden gewist — zo vervangt een heropload van
+  // hetzelfde bestand (bv. na een correctie) netjes de oude classificatie
+  // i.p.v. ernaast te blijven bestaan. Dit gebeurt EENMALIG voor de hele
+  // run (niet per categorie/batch): anders zouden latere batches elkaars
+  // net geschreven cache-entries voor datzelfde bestand kunnen wegvegen.
+  const sourceFiles = [...new Set(filteredRows.map((r) => r['sourceFile']).filter(Boolean))];
+  if (sourceFiles.length) {
+    setAnalyzeStatus('Cache voorbereiden...');
+    const { ok, status, data } = await authRequest({ mode: 'cache_invalidate_files', files: sourceFiles });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      analyzeBtn.disabled = false;
+      return;
+    }
+    if (!ok) {
+      setAnalyzeStatus('Kon cache niet voorbereiden: ' + ((data && data.error) || 'onbekende fout') + '.', true);
+      analyzeBtn.disabled = false;
+      return;
+    }
+  }
+
   showProgress(0, cats.length);
 
   // Eén analyse per categorie, parallel — dat geeft een écht

@@ -652,17 +652,46 @@ function joinText(parts) {
 }
 
 // Eén AI-aanroep voor één batch (deel van) een categorie.
-async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum) {
-  const res = await fetch(ANALYZE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      category: CATEGORY_LABELS[cat],
-      existing: { remarks: existingRemarks },
-      prospecting: { remarks: prospectingRemarks, potentialSum },
-    }),
-  });
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Alle categorieën (en binnen elke categorie, alle batches) vuren
+// gelijktijdig naar de Worker/Anthropic — bij grote datasets kan dat al
+// snel 10-15+ gelijktijdige AI-aanroepen geven. Een tijdelijke
+// rate-limit/overload-fout (429/529) of server-fout (5xx) op één daarvan
+// mag dan niet meteen de hele batch (en dus mogelijk de hele categorie,
+// zie analyzeCategory) laten mislukken — vandaar een paar nieuwe pogingen
+// met oplopende wachttijd voor je opgeeft.
+const BATCH_MAX_RETRIES = 3;
+
+async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum, attempt = 0) {
+  let res;
+  try {
+    res = await fetch(ANALYZE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: CATEGORY_LABELS[cat],
+        existing: { remarks: existingRemarks },
+        prospecting: { remarks: prospectingRemarks, potentialSum },
+      }),
+    });
+  } catch (networkErr) {
+    // fetch zelf kan falen (netwerkhik, tijdelijk niet bereikbaar) nog vóór
+    // er al een HTTP-statuscode is — ook dat verdient een nieuwe poging.
+    if (attempt < BATCH_MAX_RETRIES) {
+      await sleep(1000 * 2 ** attempt);
+      return fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum, attempt + 1);
+    }
+    throw new Error(`netwerkfout: ${networkErr.message}`);
+  }
   if (!res.ok) {
+    const transient = res.status === 429 || res.status === 529 || res.status >= 500;
+    if (transient && attempt < BATCH_MAX_RETRIES) {
+      await sleep(1000 * 2 ** attempt);
+      return fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, potentialSum, attempt + 1);
+    }
     let detail = '';
     try {
       const errBody = await res.json();

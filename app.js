@@ -207,7 +207,13 @@ const POTENTIAL_MIDPOINTS = {
 // AI-aanroepen is nu vooral een kwestie van totale doorlooptijd, niet
 // van betrouwbaarheid, want die laatste hangt af van de concurrency-
 // limiet + de 90s-timeout-met-automatische-retry in fetchAnalysisBatch.
-const BATCH_SIZE = 60;
+// 13/09, vijfde aanpassing: 60 was terug te riskant zodra meerdere
+// bestanden/maanden gecombineerd worden — nu liepen Rolluiken, Luifels
+// én Pergola (niet enkel Home) over de 90s bij 3 gecombineerde
+// bestanden. Bevestigt dat batch-grootte wél degelijk meespeelt zodra
+// het datavolume groter is, naast de concurrency. 30 (samen met de nu
+// hogere concurrency van 6) is de nog niet geteste tussenweg.
+const BATCH_SIZE = 30;
 
 // Een test met 3 Excel-bestanden (406 rijen) tegelijk liep bij
 // ANALYSIS_CONCURRENCY=3 + BATCH_SIZE=30 vast op 8+ minuten voor amper

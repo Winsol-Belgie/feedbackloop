@@ -204,7 +204,10 @@ const POTENTIAL_MIDPOINTS = {
 // timeout in worker.js. Kleinere batches -> korter antwoord per
 // aanroep -> ruim onder de tijdslimiet, tegen de prijs van iets meer
 // (parallelle) AI-aanroepen per categorie.
-const BATCH_SIZE = 30;
+// 13/09, tweede aanpassing: 30 bleek nog steeds niet klein genoeg —
+// zelfs daarmee liep een aanroep nog exact tegen onze eigen 90s-timeout
+// aan (2x na elkaar gemeten). Verder verlaagd naar 15.
+const BATCH_SIZE = 15;
 // Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
 // veel per-opmerking cache-writes de Worker heeft geprobeerd/gehaald — zie
 // fetchAnalysisBatch. Wordt bij elke "Opladen"-klik gereset en nadien in de

@@ -1520,6 +1520,39 @@ function mergeCategoryAnalyses(analyses) {
   };
 }
 
+// 13/09, zesde aanpassing: geen enkele vaste BATCH_SIZE bleek voor alle
+// categorieën/maanden veilig — het volume per categorie wisselt te veel
+// (de ene keer is Home de uitschieter, een andere keer Screens, of
+// Rolluiken/Luifels/Pergola samen). In plaats van dat globaal te blijven
+// raden: als een batch na zijn eigen retries (fetchAnalysisBatch) nog
+// steeds mislukt, heeft blindelings hetzelfde nog eens proberen geen zin
+// — maar de opmerkingen in twee helften splitsen en elke helft apart
+// (met zijn eigen volledige retry-budget) wél: vanzelf kleiner tot het
+// binnen de tijd past, specifiek voor die categorie/maand die het nodig
+// heeft, i.p.v. overal een grotere marge te nemen.
+const MIN_SPLIT_SIZE = 5;
+async function analyzeChunkWithSplit(cat, existingChunk, prospectingChunk, potentialSum) {
+  try {
+    return await limitAnalysisCall(() =>
+      fetchAnalysisBatch(cat, existingChunk, prospectingChunk, potentialSum)
+    );
+  } catch (err) {
+    const total = existingChunk.length + prospectingChunk.length;
+    if (total <= MIN_SPLIT_SIZE) throw err;
+    const halfE = Math.ceil(existingChunk.length / 2);
+    const halfP = Math.ceil(prospectingChunk.length / 2);
+    const parts = [
+      [existingChunk.slice(0, halfE), prospectingChunk.slice(0, halfP)],
+      [existingChunk.slice(halfE), prospectingChunk.slice(halfP)],
+    ].filter(([e, p]) => e.length || p.length);
+    console.warn(`[${cat}] batch van ${total} opmerking(en) mislukte (${err.message}) — opgesplitst in ${parts.length} kleinere pogingen.`);
+    const results = await Promise.all(
+      parts.map(([e, p]) => analyzeChunkWithSplit(cat, e, p, potentialSum))
+    );
+    return mergeCategoryAnalyses(results);
+  }
+}
+
 // Analyseert één categorie. Als er meer dan BATCH_SIZE bruikbare
 // opmerkingen zijn (bestaand en/of prospecting, elk apart geteld), wordt
 // dat deel in meerdere batches gesplitst die parallel naar de AI gaan; de
@@ -1535,9 +1568,7 @@ async function analyzeCategory(cat, v) {
 
   const settled = await Promise.allSettled(
     Array.from({ length: batchCount }, (_, i) =>
-      limitAnalysisCall(() =>
-        fetchAnalysisBatch(cat, existingChunks[i] || [], prospectingChunks[i] || [], v.prospecting.potentialSum)
-      )
+      analyzeChunkWithSplit(cat, existingChunks[i] || [], prospectingChunks[i] || [], v.prospecting.potentialSum)
     )
   );
 

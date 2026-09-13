@@ -142,9 +142,9 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 #globalSummaryText{font-size:13.5px;color:var(--ink-soft);line-height:1.55;margin:0;}
 #globalSummaryText.loading{color:var(--ink-faint);font-style:italic;}
 
-/* In-/uitklapbare kaarten (upload-kaart, filter+analyseer-kaart) — na
-   "Filteren" resp. "Analyseren" klapt het bijbehorende deel automatisch in
-   om plaats te besparen; de gebruiker kan dit altijd zelf omkeren. */
+/* In-/uitklapbare kaarten (upload-kaart, filter-kaart) — na "Opladen"
+   resp. "Filteren" klapt het bijbehorende deel automatisch in om plaats te
+   besparen; de gebruiker kan dit altijd zelf omkeren. */
 .card-head{display:flex;justify-content:flex-end;align-items:center;gap:10px;}
 .card-head.has-summary{justify-content:space-between;}
 .collapse-summary{margin:0;font-size:13px;font-weight:600;color:var(--ink);}
@@ -243,14 +243,14 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
       <button class="collapse-toggle" id="uploadToggle" type="button" aria-expanded="true" aria-controls="uploadBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
     </div>
     <div id="uploadBody">
-      <p class="part-sub" style="margin-top:-6px;">Bestandsnaam moet de vorm "history_BE|FR|EX_MM-JJJJ.xls(x)" hebben (regio + maand-jaar), zodat de regio automatisch herkend wordt.</p>
+      <p class="part-sub" style="margin-top:-6px;">Bestandsnaam moet de vorm "history_BE|FR|EX_MM-JJJJ.xls(x)" hebben (regio + maand-jaar), zodat de regio automatisch herkend wordt. "Opladen" analyseert meteen alle rijen via AI en bewaart de classificatie in de cache — dit is de stap die AI-kost met zich meebrengt.</p>
       <div class="dropzone" id="dropzone">
         <p><strong>Sleep je Excel-bestanden hierheen</strong> of klik om te bladeren (meerdere bestanden mogen)</p>
         <p class="fname" id="fname">Geen bestand gekozen</p>
         <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple hidden>
       </div>
       <div class="row">
-        <button class="btn" id="filterBtn" disabled>Filteren</button>
+        <button class="btn" id="filterBtn" disabled>Opladen</button>
         <span class="status" id="statusText"></span>
       </div>
     </div>
@@ -263,7 +263,7 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
     </div>
     <div id="filterBody">
       <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
-      <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant. Enkel rapporten die aan alle voorwaarden voldoen (EN, niet OF) tellen mee voor de analyse. Laat op "Alle" staan om niet te filteren.</p>
+      <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant en klik op "Filteren" — dit herschikt de al geanalyseerde/gecachete data (geen nieuwe AI-aanroep). Laat op "Alle" staan voor de volledige analyse (incl. verhalende samenvatting).</p>
       <div class="filter-row">
         <label class="filter-field">
           <span>Regio</span>
@@ -280,9 +280,9 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
         </label>
       </div>
       <p class="status" id="filterStatus"></p>
-      <h2 class="part-title" style="margin-top:20px;"><span class="step-label">Stap 2</span>Analyseren</h2>
+      <h2 class="part-title" style="margin-top:20px;"><span class="step-label">Stap 2</span>Filteren</h2>
       <div class="row">
-        <button class="btn" id="analyzeBtn" disabled>Analyseren</button>
+        <button class="btn" id="analyzeBtn" disabled>Filteren</button>
         <span class="status" id="analyzeStatus"></span>
       </div>
       <div class="progress-track" id="progressBar" hidden><div class="progress-fill" id="progressFill"></div></div>
@@ -332,6 +332,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609131130"></script>
+<script src="app.js?v=202609131215"></script>
 </body>
 </html>

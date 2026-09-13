@@ -1,18 +1,20 @@
 /* Winsol Feedbackloop — client-side logic
  * 1) Parse uploaded CRM-export (xlsx/xls/csv, incl. legacy SpreadsheetML .xls)
- * 2) Stap 1 "Filteren": bouw twee filters op uit de data (Sales Rep = kolom
- *    Q, Klant = kolom B) en laat de gebruiker optioneel één waarde per
- *    filter kiezen. Een rij moet aan BEIDE voldoen (EN) om mee te tellen —
- *    zie matchesFilters/getFilteredRows.
- * 3) Stap 2 "Analyseren", enkel op de gefilterde rijen:
+ * 2) "Opladen" (admin, kost AI-aanroepen):
  *    a) Classify each row into Screens / Shutters / Fusion / Luifels /
  *       Pergola / Outdoor / Home + bestaande klant vs. prospect
  *    b) Reken de harde cijfers lokaal uit (aantallen, potentieel in €, wie
  *       de klanten zijn) — dat gaat dus nooit "gokken"
  *    c) Stuur enkel de samengevatte cijfers + klantnamen + opmerkingen naar
  *       de Worker (worker.js), die Claude vraagt om de kwalitatieve synthese
- * 4) Render het resultaat, met per thema/probleem/wens/drempel uitklapbaar
- *    wélke klanten erachter zitten (en klikbaar door naar de brondata)
+ *       — de Worker cachet die classificatie meteen per opmerking in KV
+ *    d) Render het volledige resultaat, met per thema/probleem/wens/
+ *       drempel uitklapbaar wélke klanten erachter zitten (klikbaar naar
+ *       de brondata) — bewaard in lastFullAnalysis
+ * 3) "Filteren" (admin én user-rol, GEEN nieuwe AI-aanroep): regio/rep/
+ *    klant kiezen en herschikken — zonder filter gewoon lastFullAnalysis
+ *    opnieuw tonen, mét filter de KV-cache bevragen (renderCachedFilter).
+ *    Een rij moet aan alle gekozen filters voldoen (EN) om mee te tellen.
  *
  * Categorisering: de CRM-kolommen "Vertical shading" en "Luifels" geven een
  * hint (indien ingevuld), maar zijn in de praktijk vaak leeg. Daarom wordt
@@ -234,6 +236,14 @@ let parsedRows = [];
 // bewaard zodat de klik-op-klantnaam-popup (openCustomerModal) er nadien
 // nog bij kan, buiten de scope van de analyze-click-handler.
 let lastAgg = null;
+// "Opladen" (voorheen "Filteren") doet de volledige AI-analyse op alle
+// ingelezen rijen en cachet de classificatie; "Filteren" (voorheen
+// "Analyseren") past nadien enkel nog regio/rep/klant toe zonder nieuwe
+// AI-aanroep. Bij "geen filter" tonen we gewoon dit laatst volledige
+// resultaat opnieuw (incl. verhalende tekst) i.p.v. de cache te bevragen
+// (die geen verhalende tekst bevat — zie Fase 4/5).
+let lastFullAnalysis = null;
+let lastGlobalSummaryText = null;
 
 // URL van de losstaande Cloudflare Worker (zie worker.js).
 const ANALYZE_URL = 'https://feedbackloop.gwenn-vanthournout.workers.dev/';
@@ -513,10 +523,15 @@ async function handleFiles(fileList) {
   setCollapsed(uploadBody, uploadToggle, uploadSummary, false);
   // Nieuwe bestand(en): stap 1 (filter) moet opnieuw doorlopen worden voor
   // er geanalyseerd kan worden — dat voorkomt dat een oude filterselectie
-  // (klant/rep/regio uit een vorige upload) stilzwijgend blijft hangen.
+  // (klant/rep/regio uit een vorige upload) stilzwijgend blijft hangen. Het
+  // vorige volledige analyseresultaat is ook niet meer geldig voor deze
+  // nieuwe upload — pas na een nieuwe "Opladen" mag "Filteren" (zonder
+  // filter) dat weer zonder AI-aanroep tonen.
   filterCard.hidden = true;
   filterBtn.disabled = true;
   analyzeBtn.disabled = true;
+  lastFullAnalysis = null;
+  lastGlobalSummaryText = null;
 
   const settled = await Promise.allSettled(files.map(readFileRows));
   const ok = [];
@@ -541,7 +556,7 @@ async function handleFiles(fileList) {
   if (removed) msg += `, ${removed} dubbele rapporten (klant + datum + onderwerp) verwijderd → ${parsedRows.length} rijen over`;
   const period = reportPeriodLabel(parsedRows);
   if (period) msg += ` — periode: ${period}`;
-  msg += failed.length ? `. Mislukt: ${failed.join('; ')}.` : '. Klik op "Filteren" om verder te gaan.';
+  msg += failed.length ? `. Mislukt: ${failed.join('; ')}.` : '. Klik op "Opladen" om te analyseren.';
   setStatus(msg, failed.length > 0);
   filterBtn.disabled = parsedRows.length === 0;
 }
@@ -711,85 +726,157 @@ async function loadUserView() {
   }
 }
 
+// Gedeeld door de user-rol-kaart (userViewBtn hieronder) én de admin-
+// "Filteren"-knop (analyzeBtn, verderop): bouwt zonder nieuwe AI-aanroep
+// een agg/aiCategories op uit de KV-cache voor het gekozen regio/rep/
+// klant-filter, en rendert die met de bestaande render-functies
+// (renderResults/buildGlobalOverview) — exact zoals na een echte analyse,
+// enkel de verhalende AI-tekst ontbreekt (nooit per opmerking gecached,
+// zie Fase 4). Gooit '__handled__' bij 401/403 (showLogin is dan al
+// aangeroepen) zodat de aanroeper dat geval overslaat.
+async function renderCachedFilter(regio, rep, klant) {
+  const { ok, status, data } = await authRequest({ mode: 'cached_results', regio, rep, klant });
+  if (status === 401 || status === 403) {
+    showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+    throw new Error('__handled__');
+  }
+  if (!ok) {
+    throw new Error((data && data.error) || 'Laden mislukt.');
+  }
+
+  const agg = {};
+  const aiCategories = {};
+  for (const cat of Object.keys(CATEGORY_LABELS)) {
+    const c = data.categories[cat] || { customers: [], topic_tags: [], customer_sentiments: [] };
+    agg[cat] = { existing: { customers: c.customers }, prospecting: { customers: [], potentialSum: 0 } };
+    aiCategories[cat] = {
+      existing_customers: {
+        general_impression: c.customers.length
+          ? 'Verhalende samenvatting is niet beschikbaar bij een gefilterde weergave uit de cache — enkel de volledige (ongefilterde) analyse na "Opladen" heeft die. De cijfers en thema\'s hieronder komen wél rechtstreeks uit de cache.'
+          : '',
+        customer_sentiments: c.customer_sentiments,
+        topic_tags: c.topic_tags,
+        benchmark_product: '',
+        benchmark_price: '',
+      },
+      prospecting: { potential_summary: '', barriers: [] },
+    };
+  }
+  lastAgg = agg;
+  const globalOverview = buildGlobalOverview(agg, aiCategories);
+  renderResults(agg, aiCategories, globalOverview);
+  const summaryEl = document.getElementById('globalSummaryText');
+  if (summaryEl) {
+    summaryEl.classList.remove('loading');
+    summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar bij een gefilterde weergave uit de cache. Prospecting-cijfers zijn ook niet inbegrepen — die worden nog niet per opmerking gecached.';
+  }
+  return { matched: data.matched, total: data.total, truncated: data.truncated };
+}
+
 userViewBtn.addEventListener('click', async () => {
   userViewBtn.disabled = true;
   userViewStatus.textContent = 'Resultaten laden...';
   userViewStatus.className = 'status';
   try {
-    const { ok, status, data } = await authRequest({
-      mode: 'cached_results',
-      regio: userFilterRegio.value,
-      rep: userFilterRep.value,
-      klant: userFilterKlant.value.trim(),
-    });
-    if (status === 401 || status === 403) {
-      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
-      return;
-    }
-    if (!ok) {
-      userViewStatus.textContent = (data && data.error) || 'Laden mislukt.';
-      userViewStatus.className = 'status err';
-      userViewBtn.disabled = false;
-      return;
-    }
-
-    const agg = {};
-    const aiCategories = {};
-    for (const cat of Object.keys(CATEGORY_LABELS)) {
-      const c = data.categories[cat] || { customers: [], topic_tags: [], customer_sentiments: [] };
-      agg[cat] = { existing: { customers: c.customers }, prospecting: { customers: [], potentialSum: 0 } };
-      aiCategories[cat] = {
-        existing_customers: {
-          general_impression: c.customers.length
-            ? 'Verhalende samenvatting is niet beschikbaar in deze cache-weergave — enkel na een nieuwe analyse door een admin. De cijfers en thema\'s hieronder komen wél rechtstreeks uit de cache.'
-            : '',
-          customer_sentiments: c.customer_sentiments,
-          topic_tags: c.topic_tags,
-          benchmark_product: '',
-          benchmark_price: '',
-        },
-        prospecting: { potential_summary: '', barriers: [] },
-      };
-    }
-    lastAgg = agg;
-    const globalOverview = buildGlobalOverview(agg, aiCategories);
-    renderResults(agg, aiCategories, globalOverview);
-    const summaryEl = document.getElementById('globalSummaryText');
-    if (summaryEl) {
-      summaryEl.classList.remove('loading');
-      summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze cache-weergave (enkel na een nieuwe analyse door een admin). Prospecting-cijfers zijn hier ook niet inbegrepen — die worden nog niet per opmerking gecached.';
-    }
-    userViewStatus.textContent = `${data.matched} gecachete opmerking(en) gevonden` + (data.truncated ? ' (resultaat afgekapt — te veel matches, verfijn de filters)' : '') + '.';
+    const result = await renderCachedFilter(userFilterRegio.value, userFilterRep.value, userFilterKlant.value.trim());
+    userViewStatus.textContent = `${result.matched} gecachete opmerking(en) gevonden` + (result.truncated ? ' (resultaat afgekapt — te veel matches, verfijn de filters)' : '') + '.';
     userViewStatus.className = 'status';
-    userViewBtn.disabled = false;
   } catch (err) {
-    userViewStatus.textContent = 'Laden mislukt: ' + err.message;
-    userViewStatus.className = 'status err';
+    if (err.message !== '__handled__') {
+      userViewStatus.textContent = 'Laden mislukt: ' + err.message;
+      userViewStatus.className = 'status err';
+    }
+  } finally {
     userViewBtn.disabled = false;
   }
 });
 
-// Stap 1 — Filteren: bouwt de twee filters op uit de ingelezen data (Sales
-// Rep = kolom Q, Klant = kolom B) en toont de filterkaart. De analyse zelf
-// (stap 2) gebeurt pas na een klik op "Analyseren", met de dan geldende
-// filterselectie.
-filterBtn.addEventListener('click', () => {
+// "Opladen": verwerkt en analyseert ALLE ingelezen rijen (parsedRows,
+// ongefilterd) via AI, per categorie — dit is de enige stap die AI-kost
+// met zich meebrengt. De classificatie per opmerking wordt daarbij door de
+// Worker in de KV-cache weggeschreven (zie worker.js). Nadien bouwt dit de
+// regio/rep/klant-filters op en toont meteen het volledige resultaat; de
+// "Filteren"-knop hieronder herschikt vanaf dan enkel nog uit de cache,
+// zonder nieuwe AI-aanroep (zie renderCachedFilter/lastFullAnalysis).
+filterBtn.addEventListener('click', async () => {
+  filterBtn.disabled = true;
+  setAnalyzeStatus('');
+  setStatus('Cache voorbereiden...');
+
+  // Vóór de analyse van start gaat, worden bestaande cache-entries van de
+  // betrokken bronbestanden gewist — zo vervangt een heropload met
+  // dezelfde bestandsnaam (bv. na een correctie) netjes de oude
+  // classificatie i.p.v. ernaast te blijven bestaan.
+  const sourceFiles = [...new Set(parsedRows.map((r) => r['sourceFile']).filter(Boolean))];
+  if (sourceFiles.length) {
+    const { ok, status, data } = await authRequest({ mode: 'cache_invalidate_files', files: sourceFiles });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      filterBtn.disabled = false;
+      return;
+    }
+    if (!ok) {
+      setStatus('Kon cache niet voorbereiden: ' + ((data && data.error) || 'onbekende fout') + '.', true);
+      filterBtn.disabled = false;
+      return;
+    }
+  }
+
+  const agg = buildAggregation(parsedRows);
+  const cats = Object.keys(CATEGORY_LABELS);
+  showProgress(0, cats.length);
+  setStatus('Analyse loopt...');
+
+  let done = 0;
+  const results = await Promise.all(cats.map(async (cat) => {
+    const v = agg[cat];
+    try {
+      const analysis = await analyzeCategory(cat, v);
+      return [cat, analysis, null];
+    } catch (err) {
+      return [cat, null, err.message];
+    } finally {
+      done++;
+      showProgress(done, cats.length);
+    }
+  }));
+
+  const aiCategories = {};
+  const failed = [];
+  for (const [cat, analysis, err] of results) {
+    if (analysis) aiCategories[cat] = analysis;
+    else failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
+  }
+
+  lastFullAnalysis = { agg, aiCategories };
+  lastGlobalSummaryText = null;
+
+  // Regio/rep/klant-filters opbouwen uit de volledige (ongefilterde)
+  // dataset, zodat "Filteren" hieronder meteen bruikbaar is.
   const regios = [...new Set(parsedRows.map((r) => r['regio']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const reps = [...new Set(parsedRows.map((r) => r['rep']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const klanten = [...new Set(parsedRows.map((r) => r['name']).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-
   filterRegio.innerHTML = '<option value="">Alle</option>' + regios.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
   filterRep.innerHTML = '<option value="">Alle</option>' + reps.map((r) => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('');
   filterKlantList.innerHTML = klanten.map((k) => `<option value="${escapeAttr(k)}"></option>`).join('');
   filterKlant.value = '';
-
   filterCard.hidden = false;
   setCollapsed(filterBody, filterToggle, filterSummary, false);
   updateFilterStatus();
-  setStatus(`${parsedRows.length} rijen ingelezen. Kies eventueel een filter en klik op "Analyseren".`);
-  // Bestand is gekozen en de filters staan klaar — de upload-kaart mag nu
-  // plaats maken (Gwenn: "na het filteren, klap dit deel in").
+
+  const globalOverview = buildGlobalOverview(agg, aiCategories);
+  renderResults(agg, aiCategories, globalOverview);
+  hideProgress();
+
+  if (failed.length) {
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
+  } else {
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.`);
+  }
+  filterBtn.disabled = false;
+  // Analyse is klaar — de upload-kaart mag nu plaats maken.
   setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
+  if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
 });
 
 filterRegio.addEventListener('change', updateFilterStatus);
@@ -896,9 +983,10 @@ function setStatus(msg, isErr) {
   statusText.className = 'status' + (isErr ? ' err' : '');
 }
 
-// Status van de AI-analyse (stap 2) hoort naast de "Analyseren"-knop, niet
-// naast "Filteren" — anders lijkt het alsof de voortgang bij de verkeerde
-// knop hoort (zie screenshot van Gwenn).
+// Status van de AI-analyse hoort naast de "Filteren"-knop (in filterCard,
+// voorheen "Analyseren"), niet naast de "Opladen"-knop in de upload-kaart —
+// anders lijkt het alsof de voortgang bij de verkeerde knop hoort (zie
+// screenshot van Gwenn, oorspronkelijk over "Analyseren" vs. "Filteren").
 function setAnalyzeStatus(msg, isErr) {
   analyzeStatus.textContent = msg;
   analyzeStatus.className = 'status' + (isErr ? ' err' : '');
@@ -1247,85 +1335,56 @@ async function analyzeCategory(cat, v) {
   return mergeCategoryAnalyses(analyses);
 }
 
+// "Filteren" (voorheen "Analyseren"): NA een "Opladen" past dit enkel nog
+// het regio/rep/klant-filter toe, zonder nieuwe AI-aanroep. Zonder filter
+// ("Alle" overal) tonen we gewoon het laatst volledige analyseresultaat
+// opnieuw (incl. verhalende tekst, uit lastFullAnalysis); mét filter wordt
+// de cache bevraagd (renderCachedFilter — zie hierboven bij de user-rol),
+// wat geen verhalende tekst teruggeeft (die is nooit per opmerking
+// gecached, zie Fase 4).
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
   analyzeBtn.disabled = true;
-  setAnalyzeStatus('Data structureren...');
-  const filteredRows = getFilteredRows();
-  const agg = buildAggregation(filteredRows);
-  lastAgg = agg;
-  const cats = Object.keys(CATEGORY_LABELS);
+  const regio = filterRegio.value;
+  const rep = filterRep.value;
+  const klant = filterKlant.value.trim();
+  const noFilter = !regio && !rep && !klant;
+  const filterNote = `regio: ${regio || 'alle'} · rep: ${rep || 'alle'} · klant: ${klant || 'alle'}`;
 
-  // Fase 4: vóór de analyse van start gaat, worden bestaande cache-entries
-  // van de betrokken bronbestanden gewist — zo vervangt een heropload van
-  // hetzelfde bestand (bv. na een correctie) netjes de oude classificatie
-  // i.p.v. ernaast te blijven bestaan. Dit gebeurt EENMALIG voor de hele
-  // run (niet per categorie/batch): anders zouden latere batches elkaars
-  // net geschreven cache-entries voor datzelfde bestand kunnen wegvegen.
-  const sourceFiles = [...new Set(filteredRows.map((r) => r['sourceFile']).filter(Boolean))];
-  if (sourceFiles.length) {
-    setAnalyzeStatus('Cache voorbereiden...');
-    const { ok, status, data } = await authRequest({ mode: 'cache_invalidate_files', files: sourceFiles });
-    if (status === 401 || status === 403) {
-      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
-      analyzeBtn.disabled = false;
-      return;
+  try {
+    if (noFilter && lastFullAnalysis) {
+      lastAgg = lastFullAnalysis.agg;
+      const globalOverview = buildGlobalOverview(lastFullAnalysis.agg, lastFullAnalysis.aiCategories);
+      renderResults(lastFullAnalysis.agg, lastFullAnalysis.aiCategories, globalOverview);
+      const summaryEl = document.getElementById('globalSummaryText');
+      if (summaryEl) {
+        summaryEl.classList.remove('loading');
+        if (lastGlobalSummaryText) {
+          summaryEl.textContent = lastGlobalSummaryText;
+        } else {
+          loadGlobalSummary(globalOverview);
+        }
+      }
+      setAnalyzeStatus(`Weergave: volledige analyse (${parsedRows.length} rijen).`);
+    } else if (lastFullAnalysis) {
+      setAnalyzeStatus('Filter toepassen (uit cache, geen nieuwe AI-aanroep)...');
+      const result = await renderCachedFilter(regio, rep, klant);
+      setAnalyzeStatus(
+        `${result.matched} gecachete opmerking(en) gevonden (${filterNote})` +
+          (result.truncated ? ' — resultaat afgekapt, verfijn de filters' : '') +
+          '.'
+      );
+    } else {
+      setAnalyzeStatus('Klik eerst op "Opladen" om de geüploade bestanden te analyseren.', true);
     }
-    if (!ok) {
-      setAnalyzeStatus('Kon cache niet voorbereiden: ' + ((data && data.error) || 'onbekende fout') + '.', true);
-      analyzeBtn.disabled = false;
-      return;
+  } catch (err) {
+    if (err.message !== '__handled__') {
+      setAnalyzeStatus('Filteren mislukt: ' + err.message, true);
     }
+  } finally {
+    analyzeBtn.disabled = false;
   }
 
-  showProgress(0, cats.length);
-
-  // Eén analyse per categorie, parallel — dat geeft een écht
-  // voortgangspunt (x van y klaar) in plaats van een nagebootste balk.
-  // Elke categorie kan zelf uit meerdere AI-aanroepen bestaan als er veel
-  // opmerkingen zijn (zie analyzeCategory/BATCH_SIZE hierboven) — dat blijft
-  // hier verborgen, we wachten gewoon tot de hele categorie klaar is.
-  let done = 0;
-  const results = await Promise.all(cats.map(async (cat) => {
-    const v = agg[cat];
-    try {
-      const analysis = await analyzeCategory(cat, v);
-      return [cat, analysis, null];
-    } catch (err) {
-      return [cat, null, err.message];
-    } finally {
-      done++;
-      showProgress(done, cats.length);
-    }
-  }));
-
-  const aiCategories = {};
-  const failed = [];
-  for (const [cat, analysis, err] of results) {
-    if (analysis) aiCategories[cat] = analysis;
-    else failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
-  }
-
-  // Globaal overzicht (barometer) — volledig client-side uit de resultaten
-  // hierboven, geen extra AI-aanroep nodig. Enkel de korte samenvattende
-  // tekst erbij (loadGlobalSummary) is 1 kleine extra aanroep, en die laadt
-  // apart/asynchroon zodat de rest van de resultaten niet hoeft te wachten.
-  const globalOverview = buildGlobalOverview(agg, aiCategories);
-  renderResults(agg, aiCategories, globalOverview);
-  hideProgress();
-  const filterNote = filteredRows.length === parsedRows.length
-    ? `${parsedRows.length} rijen`
-    : `${filteredRows.length} van ${parsedRows.length} rijen (filter: ${filterRep.value || 'alle reps'} / ${filterKlant.value || 'alle klanten'})`;
-  if (failed.length) {
-    setAnalyzeStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.`, true);
-  } else {
-    setAnalyzeStatus(`Analyse voltooid op basis van ${filterNote}.`);
-  }
-  analyzeBtn.disabled = false;
-  // Analyse is klaar en de resultaten staan hierboven — de filterkaart mag
-  // nu plaats maken (Gwenn: "na het analyseren, klap ook dit deel in").
-  setCollapsed(filterBody, filterToggle, filterSummary, true,
-    `Filter: ${filterRep.value || 'alle reps'} · ${filterKlant.value || 'alle klanten'} — ${failed.length ? 'analyse deels mislukt' : 'analyse voltooid'} (${filterNote})`);
-  if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
+  setCollapsed(filterBody, filterToggle, filterSummary, true, `Filter: ${filterNote}`);
 });
 
 function showProgress(done, total) {
@@ -1707,7 +1766,8 @@ async function loadGlobalSummary(overview) {
       throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
     }
     const data = await res.json();
-    el.textContent = data.summary || 'Geen samenvatting beschikbaar.';
+    lastGlobalSummaryText = data.summary || 'Geen samenvatting beschikbaar.';
+    el.textContent = lastGlobalSummaryText;
   } catch (err) {
     el.textContent = 'Samenvatting kon niet geladen worden (' + err.message + ').';
   } finally {

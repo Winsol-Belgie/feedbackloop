@@ -734,7 +734,15 @@ cacheResetBtn.addEventListener('click', async () => {
     cacheStatus.textContent = `Cache gewist (${data.deleted} entries).`;
     cacheStatus.className = 'status';
     cacheResetBtn.disabled = false;
-    loadCacheStats();
+    // BUGFIX: hier NIET loadCacheStats() (een nieuwe cached_options-aanroep,
+    // dus een verse KV.list()) gebruiken — Workers KV is "eventually
+    // consistent" en een list() vlak na een bulkverwijdering van
+    // honderden keys kan nog even de oude staat teruggeven (in de praktijk
+    // tot de volgende page-load/F5). We weten hier al zeker dat de cache
+    // leeg is (het is precies wat cache_reset net deed), dus de weergave
+    // rechtstreeks bijwerken i.p.v. herbevragen voorkomt die verwarrende
+    // korte terugval naar het oude aantal.
+    cacheStats.textContent = 'Cache is momenteel leeg (0 gecachete opmerkingen).';
   } catch (err) {
     cacheStatus.textContent = 'Wissen mislukt: ' + err.message;
     cacheStatus.className = 'status err';

@@ -140,10 +140,9 @@ const ANALYSIS_TOOL = {
               type: 'object',
               properties: {
                 id: { type: 'string', description: 'Het opmerking-id zoals meegegeven bij "BESTAANDE KLANTEN", bv. "R3".' },
-                customer: { type: 'string', description: 'Exacte klantnaam (letterlijk overgenomen) bij dit id.' },
                 sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral', 'no_opinion'], description: '"no_opinion" voor een loutere bezoeknotitie zonder uitgesproken oordeel.' },
               },
-              required: ['id', 'customer', 'sentiment'],
+              required: ['id', 'sentiment'],
             },
             description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd opmerking-id uit "BESTAANDE KLANTEN" (in dezelfde volgorde, geen enkele overslaan). Dit is de basis voor de score-berekening in de tool — genereer dit veld als EERSTE, vóór de andere velden van existing_customers.',
           },
@@ -153,14 +152,13 @@ const ANALYSIS_TOOL = {
               type: 'object',
               properties: {
                 id: { type: 'string', description: 'Het opmerking-id (zie customer_sentiments), bv. "R3".' },
-                customer: { type: 'string', description: 'Exacte klantnaam (letterlijk overgenomen) bij dit id.' },
                 domain: { type: 'string', enum: DOMAIN_KEYS, description: 'Vast domein uit de taxonomie — zie prompt.' },
                 topic: { type: 'string', enum: TOPIC_KEYS, description: 'Vast onderwerp uit de taxonomie — zie prompt.' },
                 sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral'], description: 'Sentiment t.o.v. dit specifieke onderwerp (niet de klant in het algemeen).' },
                 detail: { type: 'string', description: 'Korte, concrete beschrijving (max. 1 zin) van wat deze opmerking hierover zegt — geen vage samenvatting.' },
                 competitor: { type: 'string', description: 'Enkel bij topic "prijsvergelijking": naam van de vermelde concurrent. Leeg laten indien niet van toepassing of niet genoemd.' },
               },
-              required: ['id', 'customer', 'domain', 'topic', 'sentiment', 'detail'],
+              required: ['id', 'domain', 'topic', 'sentiment', 'detail'],
             },
             description: 'Vaste domein/onderwerp-classificatie per opmerking (zie taxonomie in de prompt) — dit vervangt vrije "themes": elke opmerking met classificeerbare inhoud krijgt hier één of meer tags (0 tags toegestaan voor zuiver administratieve opmerkingen zonder enig classificeerbaar aspect).',
           },
@@ -357,6 +355,21 @@ export default {
       // zichtbaar is in de Worker-logs (wrangler tail). topic_tags is bewust
       // NIET exhaustief (zuiver administratieve opmerkingen mogen 0 tags
       // krijgen), dus daar geldt geen gelijkaardige check.
+      // De AI geeft enkel nog het opmerking-id terug, niet de klantnaam: die
+      // stond vroeger in ELKE customer_sentiments- én topic_tags-entry, terwijl
+      // ze volledig afleidbaar is uit het id (zie formatRemarksWithIds: ids[i]
+      // hoort bij remarks[i]). Dat was pure generatietijd — het model moest per
+      // opmerking de volledige klantnaam 3 à 4 keer uitschrijven — en meteen ook
+      // een foutenbron (verkeerd overgetypte namen). De Worker vult ze hier zelf
+      // aan, zodat de client exact dezelfde structuur blijft krijgen.
+      const nameById = new Map(existingFmt.ids.map((id, i) => [id, existing.remarks[i]?.name || '']));
+      const fillCustomer = (entry) => {
+        if (entry && !entry.customer) entry.customer = nameById.get(entry.id) || '';
+        return entry;
+      };
+      (toolUse.input?.existing_customers?.customer_sentiments || []).forEach(fillCustomer);
+      (toolUse.input?.existing_customers?.topic_tags || []).forEach(fillCustomer);
+
       const gotIds = new Set((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => s.id));
       const missingIds = existingFmt.ids.filter((id) => !gotIds.has(id));
       // Diagnose (i.o.v. Gwenn): "Screens" en "Home" kwamen herhaaldelijk
@@ -487,8 +500,8 @@ function buildPrompt(category, existingText, existingIds, prospectingText, poten
     'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
     buildTaxonomyBlock(),
     '',
-    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), de exacte klantnaam, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
-    'BELANGRIJK: verzin geen tag, klantnaam of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
+    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
+    'BELANGRIJK: verzin geen tag of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Geef nooit de klantnaam mee — het id volstaat, de tool vult de naam zelf aan. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie — daar valt geen tag uit te halen. Groepeer een onderwerp NIET breder dan de data draagt: als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, benoem dat expliciet in "general_impression" (bv. "De meeste opmerkingen hier zijn bezoeknotities zonder uitgesproken klantopinie; de feedback komt vrijwel volledig van klant Y.") in plaats van dat te laten lijken op een breed gedragen patroon.',
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',

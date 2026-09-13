@@ -197,34 +197,30 @@ const POTENTIAL_MIDPOINTS = {
 // verdeeld die parallel naar de AI gaan en nadien samengevoegd worden
 // (zie analyzeCategory) — zo gaat geen enkele klant verloren, ook niet bij
 // grote gecombineerde datasets (meerdere Excel-bestanden).
-// Geschiedenis van deze constante (13/09): 60 -> 30 -> 15 -> 30, telkens
-// in de veronderstelling dat de LENGTE van één AI-antwoord (te veel
-// opmerkingen tegelijk classificeren) de oorzaak was van een 90s/524-
-// timeout op de grootste categorie (Home). Bleek niet te kloppen: zelfs
-// bij 15 liep het nog vast, en de concurrency-limiter (hieronder) loste
-// het pas echt op. Terug naar 60 (het origineel, dat een volledige
-// analyse van 3 Excel-bestanden in ~90s deed) — minder totaal aantal
-// AI-aanroepen is nu vooral een kwestie van totale doorlooptijd, niet
-// van betrouwbaarheid, want die laatste hangt af van de concurrency-
-// limiet + de 90s-timeout-met-automatische-retry in fetchAnalysisBatch.
-// 13/09, vijfde aanpassing: 60 was terug te riskant zodra meerdere
-// bestanden/maanden gecombineerd worden — nu liepen Rolluiken, Luifels
-// én Pergola (niet enkel Home) over de 90s bij 3 gecombineerde
-// bestanden. Bevestigt dat batch-grootte wél degelijk meespeelt zodra
-// het datavolume groter is, naast de concurrency. 30 (samen met de nu
-// hogere concurrency van 6) is de nog niet geteste tussenweg.
-const BATCH_SIZE = 30;
-
-// Een test met 3 Excel-bestanden (406 rijen) tegelijk liep bij
-// ANALYSIS_CONCURRENCY=3 + BATCH_SIZE=30 vast op 8+ minuten voor amper
-// 3/7 categorieën — veel trager dan de ~90s die dit vóór alle fixes van
-// vandaag deed. 3 gelijktijdige aanroepen is duidelijk te weinig zodra
-// er meerdere bestanden/maanden in één keer geanalyseerd worden (veel
-// meer totaal aantal batches, allemaal na elkaar door een smalle
-// wachtrij). Opgetrokken naar 6 — nog steeds een cap (i.p.v. alles
-// tegelijk, de oorspronkelijke oorzaak van de terugkerende timeouts),
-// maar ruimer, in combinatie met BATCH_SIZE terug op 60.
-const ANALYSIS_CONCURRENCY = 6;
+// --- Doorlooptijd: de rekensom achter deze twee getallen ---
+// De totale wachttijd van "Opladen" wordt bijna volledig bepaald door hoeveel
+// tokens de AI moet GENEREREN, niet door het netwerk of de KV. Per opmerking
+// produceert het model ~1 sentiment-entry + gemiddeld ~2 à 3 topic_tags (elk
+// met een "detail"-zin), samen ruwweg 150 tokens. Een maand BE-data geeft zo'n
+// 250 klant/categorie-combinaties => ~38.000 tokens die hoe dan ook gegenereerd
+// moeten worden. Eén stream haalt ~60 tokens/seconde, dus:
+//
+//     totale wachttijd ~= (aantal opmerkingen x 150) / concurrency / 60
+//
+// Dat verklaart alle metingen van 13/09: bij concurrency 3 gaf dat ~5 minuten
+// (en dat was ook exact wat we zagen), bij 6 ~2,5 minuten. De enige echte
+// hendel voor SNELHEID is dus concurrency — niet BATCH_SIZE.
+//
+// BATCH_SIZE bepaalt iets anders: hoeveel tokens één enkele aanroep moet
+// genereren, en dus of die binnen de 90s-timeout blijft. Bij 60 opmerkingen
+// (~9.000 tokens, >2 minuten) ging dat structureel mis; bij 12 zit één aanroep
+// rond de 1.800 tokens (~30s) en is er ruime marge.
+//
+// Samen: veel kleine aanroepen, flink parallel. Dat is sneller én betrouwbaarder
+// dan de grote-batch-aanpak, want de trage stap (genereren) wordt dan echt
+// verdeeld i.p.v. geserialiseerd.
+const BATCH_SIZE = 12;
+const ANALYSIS_CONCURRENCY = 15;
 function createLimiter(concurrency) {
   let active = 0;
   const queue = [];

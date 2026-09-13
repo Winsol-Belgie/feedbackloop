@@ -225,44 +225,40 @@ const BATCH_SIZE = 12;
 // tweede golf (~35s) uitspaart. Ruimte genoeg: van de 2.000.000
 // output-tokens/min van het account gebruikt een volledige run er ~34.000.
 const ANALYSIS_CONCURRENCY = 25;
-// De limiter start bewust met ÉÉN aanroep en laat de rest pas los zodra die
-// klaar is ("priming"). Reden: de vaste instructies gaan als gecachete
-// system-prompt mee (zie worker.js), maar die cache bestaat pas nadat één
-// aanroep ze heeft weggeschreven. Vertrekken alle aanroepen tegelijk, dan
-// schrijft élke aanroep zijn eigen kopie — aan 1,25x de normale prijs — en
-// leest niemand. Meting 13/09 liet precies dat zien: 58.245 tokens
-// weggeschreven tegenover 27.181 gelezen, netto geen besparing. Eén aanroep
-// vooruitsturen kost ~5 seconden en maakt de cache warm voor alle volgende.
+// Begrenst hoeveel AI-aanroepen er tegelijk lopen. De prompt cache wordt
+// apart opgewarmd vóór de run start (zie warmPromptCache) — dat mag hier dus
+// geen rol meer spelen.
 function createLimiter(concurrency) {
   let active = 0;
-  let started = 0;
-  let priming = true;
   const queue = [];
   const pump = () => {
-    while (queue.length && active < concurrency && !(priming && started > 0)) {
+    while (queue.length && active < concurrency) {
       active++;
-      started++;
       const { fn, resolve, reject } = queue.shift();
       fn().then(resolve, reject).finally(() => {
         active--;
-        priming = false;
         pump();
       });
     }
   };
-  const limit = (fn) => new Promise((resolve, reject) => {
+  return (fn) => new Promise((resolve, reject) => {
     queue.push({ fn, resolve, reject });
     pump();
   });
-  // Bij een nieuwe "Opladen" opnieuw primen: de prompt cache van Anthropic
-  // vervalt na een paar minuten, dus een volgende run begint weer koud.
-  limit.reset = () => {
-    started = 0;
-    priming = true;
-  };
-  return limit;
 }
 const limitAnalysisCall = createLimiter(ANALYSIS_CONCURRENCY);
+
+// Schrijft de vaste system-prompt één keer naar Anthropic's cache vóór de
+// eigenlijke aanroepen vertrekken, zodat die er allemaal uit lezen i.p.v. elk
+// hun eigen kopie te schrijven. Kost een paar seconden. Mislukt dit, dan gaat
+// de analyse gewoon door (enkel iets duurder) — nooit blokkeren hierop.
+async function warmPromptCache() {
+  try {
+    await authRequest({ mode: 'warm_cache' });
+  } catch (err) {
+    console.warn('Opwarmen van de prompt cache mislukt:', err.message);
+  }
+}
 // Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
 // veel per-opmerking cache-writes de Worker heeft geprobeerd/gehaald — zie
 // fetchAnalysisBatch. Wordt bij elke "Opladen"-klik gereset en nadien in de
@@ -982,7 +978,7 @@ filterBtn.addEventListener('click', async () => {
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
   aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
-  limitAnalysisCall.reset();
+
   const cats = Object.keys(CATEGORY_LABELS);
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
@@ -992,6 +988,7 @@ filterBtn.addEventListener('click', async () => {
   setCollapsed(filterBody, filterToggle, filterSummary, false);
   showProgress(0, cats.length);
   setStatus('Analyse loopt...');
+  await warmPromptCache();
 
   let done = 0;
   const results = await Promise.all(cats.map(async (cat) => {

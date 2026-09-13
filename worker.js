@@ -259,6 +259,49 @@ export default {
     // krijgt — dus toegankelijk voor élke ingelogde rol, vóór de
     // admin-only check hieronder (in tegenstelling tot uploaden/analyseren
     // zelf, dat wel admin-only blijft).
+    // Warmt Anthropic's prompt cache op met exact dezelfde prefix (tools +
+    // system) als de echte analyse-aanroepen, maar zonder werk: een minimaal
+    // bericht en max_tokens 1. Zonder dit schrijft elke gelijktijdige aanroep
+    // zijn eigen cachekopie (gemeten 13/09: 58.245 geschreven tegenover 27.181
+    // gelezen). Eerst één échte batch vooruitsturen loste dat ook op, maar
+    // kostte ~40s stilstand; deze variant kost er een paar.
+    if (body.mode === 'warm_cache') {
+      if (!env.ANTHROPIC_API_KEY) return jsonResponse({ error: 'Geen API-sleutel geconfigureerd.' }, 500);
+      const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        try {
+          await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 1,
+              temperature: 0,
+              tools: [ANALYSIS_TOOL],
+              system: [
+                { type: 'text', text: getStaticInstructions(), cache_control: { type: 'ephemeral' } },
+              ],
+              messages: [{ role: 'user', content: 'ping' }],
+            }),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+        return jsonResponse({ warmed: true });
+      } catch (err) {
+        // Mislukt opwarmen is niet erg: de analyse werkt ook zonder, enkel
+        // iets duurder. Nooit de run hierop laten vastlopen.
+        return jsonResponse({ warmed: false, error: err.message });
+      }
+    }
+
     if (body.mode === 'cached_options') {
       return handleCachedOptions(env);
     }

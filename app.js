@@ -197,7 +197,14 @@ const POTENTIAL_MIDPOINTS = {
 // verdeeld die parallel naar de AI gaan en nadien samengevoegd worden
 // (zie analyzeCategory) — zo gaat geen enkele klant verloren, ook niet bij
 // grote gecombineerde datasets (meerdere Excel-bestanden).
-const BATCH_SIZE = 60;
+// Verlaagd van 60 naar 30 (13/09): bij 60 opmerkingen in één AI-aanroep
+// duurde het genereren van het volledige antwoord voor de grootste
+// categorie (Home) meer dan ~100s, wat Cloudflare zelf liet afbreken
+// met een 524-timeout ("error code: 524") — los van onze eigen 90s-
+// timeout in worker.js. Kleinere batches -> korter antwoord per
+// aanroep -> ruim onder de tijdslimiet, tegen de prijs van iets meer
+// (parallelle) AI-aanroepen per categorie.
+const BATCH_SIZE = 30;
 // Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
 // veel per-opmerking cache-writes de Worker heeft geprobeerd/gehaald — zie
 // fetchAnalysisBatch. Wordt bij elke "Opladen"-klik gereset en nadien in de

@@ -110,6 +110,14 @@ const LABEL_TO_KEY = {
 };
 const TOPIC_KEYS = DOMAIN_KEYS.flatMap((d) => Object.keys(TOPIC_TAXONOMY[d].topics));
 
+// Eén keer opbouwen: identiek voor elke aanroep, en zo byte-voor-byte
+// identiek zodat Anthropic's prompt cache aanslaat.
+let STATIC_INSTRUCTIONS_CACHE = null;
+function getStaticInstructions() {
+  if (STATIC_INSTRUCTIONS_CACHE === null) STATIC_INSTRUCTIONS_CACHE = buildStaticInstructions();
+  return STATIC_INSTRUCTIONS_CACHE;
+}
+
 const ANALYSIS_TOOL = {
   name: 'submit_analysis',
   description: 'Structured feedbackloop analysis for one product category.',
@@ -296,7 +304,7 @@ export default {
     const prospecting = body.prospecting || { remarks: [], potentialSum: 0 };
     const existingFmt = formatRemarksWithIds(existing.remarks);
     const prospectingText = formatRemarks(prospecting.remarks);
-    const prompt = buildPrompt(category, existingFmt.text, existingFmt.ids, prospectingText, prospecting.potentialSum);
+    const userMessage = buildUserMessage(category, existingFmt.text, existingFmt.ids, prospectingText, prospecting.potentialSum);
     const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
 
     try {
@@ -325,7 +333,17 @@ export default {
             temperature: 0,
             tools: [ANALYSIS_TOOL],
             tool_choice: { type: 'tool', name: 'submit_analysis' },
-            messages: [{ role: 'user', content: prompt }],
+            // cache_control op het laatste system-blok cachet alles ervoor,
+            // dus ook het toolschema. Alle categorieën/batches van één
+            // "Opladen"-run delen zo één cache-entry.
+            system: [
+              {
+                type: 'text',
+                text: getStaticInstructions(),
+                cache_control: { type: 'ephemeral' },
+              },
+            ],
+            messages: [{ role: 'user', content: userMessage }],
           }),
           signal: controller.signal,
         });
@@ -477,6 +495,8 @@ export default {
           totalIds: existingFmt.ids.length,
           inputTokens: data.usage?.input_tokens || 0,
           outputTokens: data.usage?.output_tokens || 0,
+          cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
+          cacheWriteTokens: data.usage?.cache_creation_input_tokens || 0,
           rateLimits,
         },
       });
@@ -501,15 +521,28 @@ function buildTaxonomyBlock() {
   return lines.join('\n');
 }
 
-function buildPrompt(category, existingText, existingIds, prospectingText, potentialSum) {
+// De prompt is gesplitst in twee stukken, en dat is bewust:
+//
+//   buildStaticInstructions()  - identiek bij ELKE aanroep (taxonomie,
+//                                classificatieregels, uitlegblokken)
+//   buildUserMessage(...)      - enkel wat per categorie/batch verschilt
+//
+// Meting 13/09 op history_BE_06-2026.xls: 22 aanroepen, 146.242 input- tegen
+// 32.650 output-tokens. Per aanroep dus ~6.600 input-tokens om amper 12
+// opmerkingen te classificeren — het leeuwendeel was die vaste tekst, 22 keer
+// opnieuw verstuurd en opnieuw verwerkt. Door het vaste deel als "system" met
+// cache_control mee te geven, betaalt enkel de eerste aanroep de volle prijs en
+// lezen de overige uit de cache (~10% van de kost, en geen prefill-tijd meer).
+// Het cachepunt op het laatste system-blok dekt alles ervoor, dus ook het
+// toolschema.
+function buildStaticInstructions() {
   return [
-    `Je analyseert feedback van sales-bezoekrapporten voor Winsol, specifiek voor de productcategorie "${category}" (zonwering/schrijnwerk).`,
-    `BELANGRIJK — blijf strikt binnen categorie "${category}": een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over "${category}" gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen tag, wens of drempel op basis van tekst die niet over "${category}" gaat.`,
+    'Je analyseert feedback van sales-bezoekrapporten voor Winsol (zonwering/schrijnwerk), telkens voor één specifieke productcategorie. De categorie in kwestie staat in het bericht hieronder.',
+    'BELANGRIJK — blijf strikt binnen de opgegeven categorie: een opmerking kan (fragmenten van) andere Winsol-productcategorieën vermelden (bv. screens, rolluiken, fusion, luifels, pergola, outdoor, home/schrijnwerk). Gebruik enkel het deel van een opmerking dat effectief over de opgegeven categorie gaat; negeer volledig wat over een andere categorie gaat, ook al staat het in dezelfde opmerking. Verzin geen tag, wens of drempel op basis van tekst die niet over die categorie gaat.',
     'Geef een genuanceerde, feitelijke synthese in het Nederlands.',
     '',
     '--- VERPLICHTE PER-OPMERKING CLASSIFICATIE (customer_sentiments) ---',
-    'Geef als eerste veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id hieronder bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Doe dit VOORDAT je aan "topic_tags" en de verhalende velden begint (zie hieronder) — bij een lange opmerkingenlijst kan het antwoord de lengtelimiet raken, en deze lijst bepaalt rechtstreeks de score, dus mag nooit ontbreken.',
-    `De ids die je moet gebruiken zijn: ${existingIds.join(', ') || '(geen)'}.`,
+    'Geef als eerste veld "customer_sentiments" terug — geen samenvatting, maar een volledige en uitputtende lijst: exact één entry per genummerd opmerking-id bij "BESTAANDE KLANTEN" (elk id begint met "R", bv. "R1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Doe dit VOORDAT je aan "topic_tags" en de verhalende velden begint — bij een lange opmerkingenlijst kan het antwoord de lengtelimiet raken, en deze lijst bepaalt rechtstreeks de score, dus mag nooit ontbreken.',
     'Ken per id exact één sentiment toe uit: "positive", "negative", "neutral", "no_opinion" — met deze betekenis:',
     '- "positive": de klant uit expliciete tevredenheid, lof, of wil de samenwerking duidelijk voortzetten/uitbreiden (bv. "zeer tevreden over levering", "wil graag opnieuw bestellen").',
     '- "negative": de klant uit een klacht, probleem, ontevredenheid, of overweegt/wil van leverancier wisselen (bv. "motor defect", "ontevreden over service", "klant twijfelt door slechte ervaring").',
@@ -522,16 +555,23 @@ function buildPrompt(category, existingText, existingIds, prospectingText, poten
     'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
     buildTaxonomyBlock(),
     '',
-    'Voor elke tag geef je: het opmerking-id (zie hieronder bij "BESTAANDE KLANTEN"), het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
+    'Voor elke tag geef je: het opmerking-id, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
     'BELANGRIJK: verzin geen tag of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Geef nooit de klantnaam mee — het id volstaat, de tool vult de naam zelf aan. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     'BELANGRIJK — brede spreiding, geen schijnconsensus: veel remarks zijn loutere bezoeknotities zonder échte klantopinie — daar valt geen tag uit te halen. Groepeer een onderwerp NIET breder dan de data draagt: als de kwalitatieve inhoud in de praktijk van maar 1-2 klanten komt, benoem dat expliciet in "general_impression" (bv. "De meeste opmerkingen hier zijn bezoeknotities zonder uitgesproken klantopinie; de feedback komt vrijwel volledig van klant Y.") in plaats van dat te laten lijken op een breed gedragen patroon.',
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
-    'BELANGRIJK — geen absolute aantallen in "general_impression": de opmerkingen die je hier krijgt kunnen een deelverzameling zijn van een groter geheel voor deze categorie (grote categorieën worden in meerdere stukken tegelijk verwerkt en nadien samengevoegd — jij ziet mogelijk niet alle opmerkingen). Vermeld daarom NOOIT een concreet aantal rapporten/opmerkingen (bv. "de meeste van de 26 rapporten"), want dat aantal klopt mogelijk niet met het totaal voor de hele categorie. Gebruik in plaats daarvan relatieve bewoordingen zonder getal, zoals "de meeste opmerkingen hier", "een minderheid", of "vrijwel alle".',
+    'BELANGRIJK — geen absolute aantallen in "general_impression": de opmerkingen die je krijgt kunnen een deelverzameling zijn van een groter geheel voor deze categorie (grote categorieën worden in meerdere stukken tegelijk verwerkt en nadien samengevoegd — jij ziet mogelijk niet alle opmerkingen). Vermeld daarom NOOIT een concreet aantal rapporten/opmerkingen (bv. "de meeste van de 26 rapporten"), want dat aantal klopt mogelijk niet met het totaal voor de hele categorie. Gebruik in plaats daarvan relatieve bewoordingen zonder getal, zoals "de meeste opmerkingen hier", "een minderheid", of "vrijwel alle".',
     '',
     '--- PROSPECTS: potential_summary / barriers ---',
-    'Analyseer het PROSPECTS-gedeelte hieronder (potentiële klanten, nog geen bestaande klant) even grondig als de bestaande klanten hierboven — dit is geen bijzaak. In "potential_summary" geef je een feitelijke synthese van het commerciële potentieel voor deze categorie bij deze prospects: welke concrete interesse/vraag blijkt uit de opmerkingen, welke signalen wijzen op een reële kans (bv. concrete offerteaanvraag, expliciete interesse in dit product), en hoe verhoudt dat zich tot het vermelde geschatte totaalpotentieel. Als er geen of nauwelijks bruikbare prospect-opmerkingen zijn, zeg dat expliciet (bv. "onvoldoende data over prospects voor deze categorie") — laat "potential_summary" nooit leeg en verzin niets.',
+    'Analyseer het PROSPECTS-gedeelte (potentiële klanten, nog geen bestaande klant) even grondig als de bestaande klanten — dit is geen bijzaak. In "potential_summary" geef je een feitelijke synthese van het commerciële potentieel voor deze categorie bij deze prospects: welke concrete interesse/vraag blijkt uit de opmerkingen, welke signalen wijzen op een reële kans (bv. concrete offerteaanvraag, expliciete interesse in dit product), en hoe verhoudt dat zich tot het vermelde geschatte totaalpotentieel. Als er geen of nauwelijks bruikbare prospect-opmerkingen zijn, zeg dat expliciet (bv. "onvoldoende data over prospects voor deze categorie") — laat "potential_summary" nooit leeg en verzin niets.',
     'In "barriers" groepeer je concrete drempels/obstakels die uit de prospect-opmerkingen blijken en die verklaren waarom een prospect nog niet converteert (bv. prijs te hoog, kiest voor een concurrent, wacht op budget, technische twijfel, nog in oriëntatiefase). Elke barrier krijgt een korte "label" en de exacte klantnamen die deze drempel vermelden. Verzin geen barrier zonder tekstuele basis in de opmerkingen; zijn er geen duidelijke drempels te herkennen, geef dan gewoon een lege array terug.',
+  ].join('\n');
+}
+
+function buildUserMessage(category, existingText, existingIds, prospectingText, potentialSum) {
+  return [
+    `PRODUCTCATEGORIE: "${category}". Analyseer uitsluitend wat over deze categorie gaat.`,
+    `De ids die je in "customer_sentiments" moet gebruiken zijn: ${existingIds.join(', ') || '(geen)'}.`,
     '',
     '--- BESTAANDE KLANTEN ---',
     existingText,

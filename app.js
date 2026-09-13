@@ -257,7 +257,7 @@ let aiResponseIssues = {};
 // de inhoud liggen of gewoon aan de limiet van het Anthropic-account: als
 // "outputRemaining" op 0 staat, zit je tegen het plafond en helpt geen enkele
 // batch-/concurrency-instelling nog.
-let aiUsageStats = { inputTokens: 0, outputTokens: 0, calls: 0, limits: null, minOutputRemaining: null };
+let aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: 0 };
 
 // Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
 // classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
@@ -957,7 +957,7 @@ filterBtn.addEventListener('click', async () => {
   lastAgg = agg;
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
-  aiUsageStats = { inputTokens: 0, outputTokens: 0, calls: 0, limits: null, minOutputRemaining: null };
+  aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
   const cats = Object.keys(CATEGORY_LABELS);
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
@@ -1038,17 +1038,23 @@ filterBtn.addEventListener('click', async () => {
   // aan de hoeveelheid werk lag of aan de rate limit van het Anthropic-account.
   let usageNote = '';
   if (aiUsageStats.calls) {
-    const lim = aiUsageStats.limits || {};
-    const kosten = (aiUsageStats.inputTokens / 1e6) * 3 + (aiUsageStats.outputTokens / 1e6) * 15;
-    usageNote = ` AI-verbruik: ${aiUsageStats.calls} aanroep(en), ` +
-      `${aiUsageStats.inputTokens.toLocaleString('nl-BE')} input- en ` +
-      `${aiUsageStats.outputTokens.toLocaleString('nl-BE')} output-tokens (± $${kosten.toFixed(2)}).`;
-    if (lim.outputLimit) {
-      usageNote += ` Accountlimiet: ${Number(lim.outputLimit).toLocaleString('nl-BE')} output-tokens/min` +
-        (aiUsageStats.minOutputRemaining !== null
-          ? `, laagste resterend tijdens deze run: ${aiUsageStats.minOutputRemaining.toLocaleString('nl-BE')}`
-          : '') + '.';
+    const duurSec = aiUsageStats.startedAt ? Math.round((Date.now() - aiUsageStats.startedAt) / 1000) : 0;
+    const duurTxt = duurSec >= 60 ? `${Math.floor(duurSec / 60)}m${String(duurSec % 60).padStart(2, '0')}s` : `${duurSec}s`;
+    // Prijzen per miljoen tokens: input $3, cache-write $3,75, cache-read
+    // $0,30, output $15. Cache-tokens staan los van "input_tokens".
+    const kosten =
+      (aiUsageStats.inputTokens / 1e6) * 3 +
+      (aiUsageStats.cacheWriteTokens / 1e6) * 3.75 +
+      (aiUsageStats.cacheReadTokens / 1e6) * 0.3 +
+      (aiUsageStats.outputTokens / 1e6) * 15;
+    usageNote = ` Duur: ${duurTxt} voor ${aiUsageStats.calls} AI-aanroep(en). ` +
+      `Tokens: ${aiUsageStats.inputTokens.toLocaleString('nl-BE')} input, ` +
+      `${aiUsageStats.outputTokens.toLocaleString('nl-BE')} output`;
+    if (aiUsageStats.cacheReadTokens || aiUsageStats.cacheWriteTokens) {
+      usageNote += `, ${aiUsageStats.cacheReadTokens.toLocaleString('nl-BE')} uit cache gelezen ` +
+        `(${aiUsageStats.cacheWriteTokens.toLocaleString('nl-BE')} weggeschreven)`;
     }
+    usageNote += ` — ± $${kosten.toFixed(2)}.`;
   }
   if (failed.length) {
     setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${usageNote}`, true);
@@ -1515,6 +1521,8 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     aiUsageStats.calls++;
     aiUsageStats.inputTokens += d.inputTokens || 0;
     aiUsageStats.outputTokens += d.outputTokens || 0;
+    aiUsageStats.cacheReadTokens += d.cacheReadTokens || 0;
+    aiUsageStats.cacheWriteTokens += d.cacheWriteTokens || 0;
     if (d.rateLimits) {
       aiUsageStats.limits = d.rateLimits;
       const rem = parseInt(d.rateLimits.outputRemaining, 10);

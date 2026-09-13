@@ -207,7 +207,12 @@ const POTENTIAL_MIDPOINTS = {
 // 13/09, tweede aanpassing: 30 bleek nog steeds niet klein genoeg —
 // zelfs daarmee liep een aanroep nog exact tegen onze eigen 90s-timeout
 // aan (2x na elkaar gemeten). Verder verlaagd naar 15.
-const BATCH_SIZE = 15;
+// 13/09, vierde aanpassing: nu de concurrency-limiter (verderop) de
+// eigenlijke oorzaak (te veel gelijktijdige aanroepen) aanpakt, kan
+// BATCH_SIZE weer omhoog — minder totaal aantal batches betekent een
+// kortere wachtrij en dus een kortere totale doorlooptijd, zonder de
+// bescherming van de concurrency-limiet te verliezen.
+const BATCH_SIZE = 30;
 
 // 13/09, derde aanpassing: BATCH_SIZE verlagen (60->30->15) loste het
 // Home-timeout-probleem niet op — zelfs bij 15 opmerkingen per aanroep

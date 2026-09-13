@@ -208,6 +208,41 @@ const POTENTIAL_MIDPOINTS = {
 // zelfs daarmee liep een aanroep nog exact tegen onze eigen 90s-timeout
 // aan (2x na elkaar gemeten). Verder verlaagd naar 15.
 const BATCH_SIZE = 15;
+
+// 13/09, derde aanpassing: BATCH_SIZE verlagen (60->30->15) loste het
+// Home-timeout-probleem niet op — zelfs bij 15 opmerkingen per aanroep
+// liep het na 6/7 categorieën weer vast op exact dezelfde 90s-timeout.
+// Dat wijst er sterk op dat het NIET de lengte van één antwoord is die
+// het probleem is, maar het TOTAAL AANTAL gelijktijdige AI-aanroepen:
+// alle 7 categorieën (en, met een kleinere BATCH_SIZE, elk mogelijk in
+// meerdere batches) vuren nu allemaal tegelijk af. Als Home toevallig de
+// categorie met de meeste opmerkingen is (zoals eerder al bleek: 83/83
+// in de 3-maanden-test), genereert net die categorie de meeste
+// gelijktijdige sub-aanroepen — en een kleinere BATCH_SIZE maakt dat
+// alleen maar erger (meer, niet minder, gelijktijdige aanroepen).
+// Een eenvoudige concurrency-limiter (max. ANALYSIS_CONCURRENCY
+// gelijktijdige AI-aanroepen, de rest wacht in een wachtrij) moet
+// wachttijden/eventuele rate-limiting bij Claude's API vermijden, ten
+// koste van een iets langere totale doorlooptijd voor "Opladen".
+const ANALYSIS_CONCURRENCY = 3;
+function createLimiter(concurrency) {
+  let active = 0;
+  const queue = [];
+  const runNext = () => {
+    if (active >= concurrency || queue.length === 0) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    fn().then(resolve, reject).finally(() => {
+      active--;
+      runNext();
+    });
+  };
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject });
+    runNext();
+  });
+}
+const limitAnalysisCall = createLimiter(ANALYSIS_CONCURRENCY);
 // Telt, over alle categorie/batch-aanroepen van één "Opladen"-run heen, hoe
 // veel per-opmerking cache-writes de Worker heeft geprobeerd/gehaald — zie
 // fetchAnalysisBatch. Wordt bij elke "Opladen"-klik gereset en nadien in de
@@ -1500,7 +1535,9 @@ async function analyzeCategory(cat, v) {
 
   const settled = await Promise.allSettled(
     Array.from({ length: batchCount }, (_, i) =>
-      fetchAnalysisBatch(cat, existingChunks[i] || [], prospectingChunks[i] || [], v.prospecting.potentialSum)
+      limitAnalysisCall(() =>
+        fetchAnalysisBatch(cat, existingChunks[i] || [], prospectingChunks[i] || [], v.prospecting.potentialSum)
+      )
     )
   );
 

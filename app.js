@@ -1201,7 +1201,13 @@ filterBtn.addEventListener('click', async () => {
   for (const [cat, info] of Object.entries(aiResponseIssues)) {
     if (info.missingIds > 0 || info.stopReasons.size) {
       const reasonTxt = info.stopReasons.size ? ` (stop_reason: ${[...info.stopReasons].join(', ')})` : '';
-      aiNotes.push(`${CATEGORY_LABELS[cat]}: ${info.missingIds}/${info.totalIds} opmerking(en) zonder classificatie${reasonTxt}`);
+      const d0 = (info.details && info.details[0]) || null;
+      const splitsing = d0
+        ? ` [klanten ${d0.existingMissing}/${d0.existingTotal}, prospects ${d0.prospectMissing}/${d0.prospectTotal};` +
+          ` AI gaf ${d0.sentimentsTerug} sentiment(en), ${d0.tagsTerug} tag(s), ${d0.signalsTerug} signaal/signalen;` +
+          ` verwacht ${d0.idsVerwacht.join(',')} — terug ${d0.idsTerug.join(',') || '(niets)'}]`
+        : '';
+      aiNotes.push(`${CATEGORY_LABELS[cat]}: ${info.missingIds}/${info.totalIds} opmerking(en) zonder classificatie${reasonTxt}${splitsing}`);
     }
   }
   const aiNote = aiNotes.length ? ` Let op — onvolledig AI-antwoord voor: ${aiNotes.join('; ')}.` : '';
@@ -1740,6 +1746,13 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     aiResponseIssues[cat].missingIds += d.missingIds || 0;
     aiResponseIssues[cat].totalIds += d.totalIds || 0;
     if (d.stopReason && d.stopReason !== 'tool_use') aiResponseIssues[cat].stopReasons.add(d.stopReason);
+    if (d.detail && (d.detail.existingMissing || d.detail.prospectMissing)) {
+      // Eén regel per problematische aanroep, zichtbaar in de console — genoeg
+      // om te zien of de lijsten leeg waren dan wel gevuld met andere ids.
+      console.warn(`[${cat}] onvolledig antwoord`, d.detail);
+      if (!aiResponseIssues[cat].details) aiResponseIssues[cat].details = [];
+      aiResponseIssues[cat].details.push(d.detail);
+    }
   }
   if (data.diagnostics) {
     const d = data.diagnostics;

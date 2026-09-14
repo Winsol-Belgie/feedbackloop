@@ -609,6 +609,21 @@ export default {
           stopReason,
           missingIds: missingIds.length + missingProspectIds.length,
           totalIds: existingFmt.ids.length + prospectingFmt.ids.length,
+          // Uitgesplitst, plus wat het model wél teruggaf. Zonder dit blijft
+          // "22/22 zonder classificatie" een raadsel: je ziet niet of de
+          // lijsten leeg waren, of gevuld met ids die wij niet verstuurd
+          // hebben (bv. andere nummering).
+          detail: {
+            existingTotal: existingFmt.ids.length,
+            existingMissing: missingIds.length,
+            prospectTotal: prospectingFmt.ids.length,
+            prospectMissing: missingProspectIds.length,
+            sentimentsTerug: (toolUse.input?.existing_customers?.customer_sentiments || []).length,
+            tagsTerug: (toolUse.input?.existing_customers?.topic_tags || []).length,
+            signalsTerug: (toolUse.input?.prospecting?.prospect_signals || []).length,
+            idsVerwacht: existingFmt.ids.slice(0, 4).concat(prospectingFmt.ids.slice(0, 4)),
+            idsTerug: [...gotIds].slice(0, 4).concat([...gotProspectIds].slice(0, 4)),
+          },
           inputTokens: data.usage?.input_tokens || 0,
           outputTokens: data.usage?.output_tokens || 0,
           cacheReadTokens: data.usage?.cache_read_input_tokens || 0,

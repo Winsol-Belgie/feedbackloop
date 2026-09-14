@@ -1064,6 +1064,27 @@ filterBtn.addEventListener('click', async () => {
   const hergebruikt = cachedKeys.size;
   const nieuw = candidateKeys.length - hergebruikt;
 
+  // Records die al gecachet zijn worden niet opnieuw geanalyseerd, en dus ook
+  // niet herschreven. Velden die uit de Excel komen (vandaag: de EUR-waarde)
+  // zouden daardoor nooit in oudere records belanden. Die vullen we hier bij,
+  // zonder AI — in stukken, want elke record kost een lees- en een
+  // schrijfbewerking en Cloudflare begrenst het aantal per aanvraag.
+  const teVerrijken = [];
+  for (const cat of cats) {
+    const alle = [
+      ...remarksForAi(agg[cat].existing.customers, cat),
+      ...remarksForAi(agg[cat].prospecting.customers, cat),
+    ];
+    for (const r of alle) {
+      if (!r.key || !r.sourceFile || !r.potential) continue;
+      const naam = `remark:${r.sourceFile}:${cat}:${r.key}`;
+      if (cachedKeys.has(naam)) teVerrijken.push({ name: naam, potential: r.potential });
+    }
+  }
+  for (let i = 0; i < teVerrijken.length; i += 150) {
+    await authRequest({ mode: 'enrich_records', updates: teVerrijken.slice(i, i + 150) });
+  }
+
   // Elk bezoekrapport apart registreren, los van de AI-analyse. De
   // "remark:"-records bestaan enkel voor opmerkingen met bruikbare tekst per
   // categorie, dus bezoeken met een lege of administratieve notitie zaten

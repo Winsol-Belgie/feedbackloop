@@ -340,6 +340,9 @@ export default {
     if (body.mode === 'store_visits') {
       return handleStoreVisits(body, env);
     }
+    if (body.mode === 'enrich_records') {
+      return handleEnrichRecords(body, env);
+    }
     if (body.mode === 'cache_reset') {
       return handleCacheReset(env);
     }
@@ -892,6 +895,42 @@ async function handleAdminUpsertUsers(body, env) {
 // aanroep terug, met een cursor voor de rest) en verwijdert ze. Gebruikt
 // door zowel de per-bestand invalidatie (Fase 4) als de volledige
 // cache-reset hieronder — enkel het verschil in prefix.
+// Vult velden bij die uit de Excel komen, niet uit de AI — vandaag enkel de
+// EUR-waarde. Nodig omdat de kostenrem opmerkingen die al gecachet zijn
+// overslaat: zonder deze stap zouden records die vóór een uitbreiding
+// weggeschreven zijn dat veld nooit krijgen, tenzij je de hele maand opnieuw
+// (en betalend) zou laten analyseren. De classificatie zelf blijft ongemoeid.
+async function handleEnrichRecords(body, env) {
+  const updates = Array.isArray(body.updates) ? body.updates : [];
+  if (!updates.length) return jsonResponse({ patched: 0 });
+
+  const namen = updates.map((u) => u && u.name).filter(Boolean);
+  const records = await Promise.all(namen.map((n) => env.FEEDBACKLOOP_KV.get(n, 'json')));
+
+  const writes = [];
+  records.forEach((rec, i) => {
+    if (!rec) return;
+    const wens = Number(updates[i].potential) || 0;
+    if ((Number(rec.potential) || 0) === wens) return; // niets te doen
+    rec.potential = wens;
+    writes.push(
+      env.FEEDBACKLOOP_KV.put(namen[i], JSON.stringify(rec), {
+        metadata: {
+          category: rec.category,
+          sourceFile: rec.sourceFile,
+          klant: rec.klant,
+          rep: rec.rep || '',
+          regio: rec.regio || '',
+          date: rec.dateIso || '',
+          kind: rec.kind || 'existing',
+        },
+      })
+    );
+  });
+  const settled = await Promise.allSettled(writes);
+  return jsonResponse({ patched: settled.filter((s) => s.status === 'fulfilled').length });
+}
+
 // Registreert elk bezoekrapport apart, los van de AI-analyse. Nodig omdat de
 // "remark:"-records alleen bestaan voor opmerkingen die bruikbare tekst voor
 // een categorie bevatten: een bezoek met een lege of louter administratieve

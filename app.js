@@ -1667,10 +1667,32 @@ function remarksForAi(customers, targetCat) {
 // Verdeelt een array in stukken van max. `size` elementen. Een lege array
 // geeft [[]] terug (één lege batch) zodat een categorie zonder opmerkingen
 // nog steeds als één (leeg) verzoek naar de AI gaat, zoals voorheen.
+// Verdeelt in batches op TWEE grenzen: aantal opmerkingen én totale
+// tekstlengte. Alleen op aantal tellen ging mis zodra opmerkingen lang zijn:
+// in history_BE_04-2026.xls bleken de Home-opmerkingen volledige gestructureerde
+// bezoekverslagen van tot 2.947 tekens (mediaan elders: ~320). Twaalf daarvan in
+// één aanroep is ruim 8.000 tekens dichte tekst; het model liep tegen de
+// 90-secondengrens en gaf de uitputtende lijst niet meer rond — 22 van de 22
+// opmerkingen kwamen zonder classificatie terug. De last zit dus in tekens, niet
+// in stuks. Eén opmerking die op zichzelf al over de grens gaat, krijgt gewoon
+// een eigen batch.
+const BATCH_CHAR_LIMIT = 4000;
 function chunkArray(arr, size) {
-  if (arr.length <= size) return [arr];
+  if (!arr.length) return [arr];
   const chunks = [];
-  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  let huidig = [];
+  let tekens = 0;
+  for (const item of arr) {
+    const lengte = ((item && item.remark) || '').length;
+    if (huidig.length && (huidig.length >= size || tekens + lengte > BATCH_CHAR_LIMIT)) {
+      chunks.push(huidig);
+      huidig = [];
+      tekens = 0;
+    }
+    huidig.push(item);
+    tekens += lengte;
+  }
+  if (huidig.length) chunks.push(huidig);
   return chunks;
 }
 

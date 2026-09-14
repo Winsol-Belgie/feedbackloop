@@ -107,8 +107,11 @@ h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
 .info-banner{background:#fff9da;border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px;font-size:12.5px;color:var(--ink);margin-bottom:16px;}
 label.field{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;color:var(--ink-faint);margin-top:10px;}
 input[type=password]{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:inherit;font-size:13px;flex:1;}
-.filter-row{display:flex;gap:16px;flex-wrap:wrap;margin:14px 0 6px;}
-.filter-field{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink-faint);font-weight:600;flex:1;min-width:220px;}
+/* Vaste kolommen i.p.v. flex-groei: met vijf velden (regio, rep, klant, van,
+   tot) sprong de laatste anders op een eigen rij en werd die twee keer zo
+   breed als de rest. */
+.filter-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin:14px 0 6px;}
+.filter-field{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink-faint);font-weight:600;min-width:0;}
 .filter-field select,.filter-field input{border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-family:inherit;font-size:13px;color:var(--ink-soft);background:var(--paper-2);}
 .filter-field select:focus,.filter-field input:focus{outline:2px solid var(--accent);outline-offset:1px;}
 .step-label{display:inline-block;background:var(--surface-dark);color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;margin-right:8px;vertical-align:middle;}
@@ -378,6 +381,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609141200"></script>
+<script src="app.js?v=202609141300"></script>
 </body>
 </html>

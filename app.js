@@ -877,22 +877,57 @@ async function loadUserView() {
 // het net getoonde volledige resultaat, voor één consistent gedrag.
 // Gooit '__handled__' bij 401/403 (showLogin is dan al aangeroepen) zodat
 // de aanroeper dat geval overslaat.
-async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo) {
-  const { ok, status, data } = await authRequest({
-    mode: 'cached_results',
-    regio,
-    rep,
-    klant,
-    dateFrom: dateFrom || '',
-    dateTo: dateTo || '',
-  });
-  if (status === 401 || status === 403) {
-    showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
-    throw new Error('__handled__');
-  }
-  if (!ok) {
-    throw new Error((data && data.error) || 'Laden mislukt.');
-  }
+// De Worker geeft de gecachete opmerkingen per pagina terug (zie
+// CACHE_PAGE_SIZE): Cloudflare laat maar een beperkt aantal KV-leesbewerkingen
+// per aanvraag toe. Hier halen we pagina na pagina op tot alles binnen is en
+// voegen we ze samen — vroeger werd er gewoon afgekapt op 800, met stilzwijgend
+// onvolledige cijfers als gevolg.
+const MAX_CACHE_PAGES = 40;
+async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgress) {
+  const data = { categories: {}, perMaand: {}, visitCount: 0, total: 0, matched: 0 };
+  let cursor = null;
+  let paginas = 0;
+  do {
+    const res = await authRequest({
+      mode: 'cached_results',
+      regio,
+      rep,
+      klant,
+      dateFrom: dateFrom || '',
+      dateTo: dateTo || '',
+      cursor,
+    });
+    if (res.status === 401 || res.status === 403) {
+      showLogin(res.status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      throw new Error('__handled__');
+    }
+    if (!res.ok) {
+      throw new Error((res.data && res.data.error) || 'Laden mislukt.');
+    }
+    const d = res.data || {};
+    for (const [cat, bron] of Object.entries(d.categories || {})) {
+      if (!data.categories[cat]) {
+        data.categories[cat] = { customers: [], topic_tags: [], customer_sentiments: [], prospects: { customers: [], signals: [], potentialSum: 0 } };
+      }
+      const doel = data.categories[cat];
+      doel.customers.push(...(bron.customers || []));
+      doel.topic_tags.push(...(bron.topic_tags || []));
+      doel.customer_sentiments.push(...(bron.customer_sentiments || []));
+      const bp = bron.prospects || {};
+      doel.prospects.customers.push(...(bp.customers || []));
+      doel.prospects.signals.push(...(bp.signals || []));
+      doel.prospects.potentialSum += bp.potentialSum || 0;
+    }
+    // Bezoeken worden enkel op de eerste pagina geteld (ze komen uit een
+    // aparte, goedkope telling op metadata).
+    if (d.perMaand && Object.keys(d.perMaand).length) data.perMaand = d.perMaand;
+    if (d.visitCount) data.visitCount = d.visitCount;
+    data.total += d.total || 0;
+    data.matched += d.matched || 0;
+    cursor = d.nextCursor || null;
+    paginas++;
+    if (onProgress) onProgress(data.matched, !!cursor);
+  } while (cursor && paginas < MAX_CACHE_PAGES);
 
   const agg = {};
   const aiCategories = {};
@@ -925,7 +960,7 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo) {
     summaryEl.classList.remove('loading');
     summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze weergave uit de cache — die verschijnt enkel meteen na een verse "Opladen". De cijfers, thema\'s en prospect-classificatie hieronder komen wél volledig uit de cache.';
   }
-  return { matched: data.matched, total: data.total, truncated: data.truncated };
+  return { matched: data.matched, total: data.total, visitCount: data.visitCount };
 }
 
 // Gedeelde klik-afhandeling voor "Filteren" (admin) en "Tonen" (user-rol):
@@ -936,10 +971,12 @@ async function applyCachedFilter(regio, rep, klant, btnEl, statusEl, dateFrom, d
   statusEl.textContent = 'Filter toepassen (uit cache, geen nieuwe AI-aanroep)...';
   statusEl.className = 'status';
   try {
-    const result = await renderCachedFilter(regio, rep, klant, dateFrom, dateTo);
+    const result = await renderCachedFilter(regio, rep, klant, dateFrom, dateTo, (sofar, meer) => {
+      if (meer) statusEl.textContent = `Uit cache laden... ${sofar} opmerking(en)`;
+    });
     statusEl.textContent =
       `${result.matched} gecachete opmerking(en) gevonden` +
-      (result.truncated ? ' (resultaat afgekapt — te veel matches, verfijn de filters)' : '') +
+      (result.visitCount ? ` uit ${result.visitCount} bezoekrapport(en)` : '') +
       '.';
     statusEl.className = 'status';
   } catch (err) {
@@ -1834,8 +1871,17 @@ function renderVisitsChart(perMaand) {
   if (!card || !host) return;
   const maanden = Object.keys(perMaand || {}).filter(Boolean).sort();
   if (!maanden.length) {
-    card.hidden = true;
-    host.innerHTML = '';
+    // Niet stilletjes verdwijnen: bezoeken worden pas geregistreerd vanaf de
+    // versie van 14/09, dus bestanden die daarvóór geanalyseerd zijn hebben er
+    // nog geen. Eén keer heropladen volstaat en kost geen AI (alle opmerkingen
+    // staan al in de cache).
+    host.className = 'visits';
+    host.innerHTML =
+      '<p class="visits-empty">Nog geen bezoekregistratie voor deze selectie. ' +
+      'Bezoeken worden bijgehouden vanaf het moment dat een bestand opgeladen wordt — ' +
+      'laad je maandbestanden één keer opnieuw op (dat kost geen AI-aanroep, want de ' +
+      'opmerkingen staan al in de cache) en de grafiek vult zich vanzelf.</p>';
+    card.hidden = false;
     return;
   }
   const rijen = maanden.map((m) => {

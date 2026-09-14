@@ -1068,14 +1068,12 @@ async function handleCachedOptions(env) {
   });
 }
 
-// Cap op het aantal gecachete opmerkingen dat in één keer volledig
-// opgehaald (KV.get) wordt voor een cached_results-aanvraag. Elke KV.get()
-// telt mee als een subrequest, en Cloudflare Workers laat daar per
-// aanvraag maar een beperkt aantal van toe — deze waarde blijft daar ruim
-// onder, met marge voor de list()-aanroepen erboven. Bij méér matches dan
-// dit wordt het resultaat afgekapt (zie "truncated" in de response) en kan
-// verder gefilterd worden (regio/rep/klant) om onder de grens te komen.
-const CACHE_READ_LIMIT = 800;
+// Aantal gecachete opmerkingen per pagina. Elke KV.get() telt als een
+// subrequest en Cloudflare laat er per aanvraag ~1000 toe, dus dit blijft
+// daar ruim onder. De client haalt achtereenvolgende pagina's op via de
+// "nextCursor" in het antwoord, zodat een groeiende cache niet langer
+// stilzwijgend afgekapt wordt.
+const CACHE_PAGE_SIZE = 400;
 
 // Fase 5: bouwt, ZONDER nieuwe AI-aanroep, per categorie een
 // topic_tags/customer_sentiments/customers-set op uit de cache — exact de
@@ -1124,25 +1122,28 @@ async function handleCachedResults(body, env) {
     return true;
   };
 
+  // Cloudflare staat ~1000 KV-bewerkingen per aanvraag toe, en elke record
+  // ophalen is er één. Vroeger kapten we daarom af op CACHE_READ_LIMIT, wat
+  // bij een groeiende cache stilletjes onvolledige cijfers gaf ("800
+  // gecachete opmerkingen gevonden — resultaat afgekapt"). Nu halen we per
+  // aanvraag één pagina op en geeft de Worker een cursor terug; de client
+  // herhaalt tot alles binnen is.
   const matchingKeys = [];
   let total = 0;
-  let cursor;
-  do {
-    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
-    for (const k of page.keys) {
-      total++;
-      const m = k.metadata || {};
-      if (regioFilter && m.regio !== regioFilter) continue;
-      if (repFilter && m.rep !== repFilter) continue;
-      if (klantFilter && m.klant !== klantFilter) continue;
-      if (m.date && !inPeriode(m.date)) continue;
-      matchingKeys.push(k.name);
-    }
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor);
+  let cursor = body.cursor || undefined;
+  const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor, limit: CACHE_PAGE_SIZE });
+  for (const k of page.keys) {
+    total++;
+    const m = k.metadata || {};
+    if (regioFilter && m.regio !== regioFilter) continue;
+    if (repFilter && m.rep !== repFilter) continue;
+    if (klantFilter && m.klant !== klantFilter) continue;
+    if (m.date && !inPeriode(m.date)) continue;
+    matchingKeys.push(k.name);
+  }
+  const nextCursor = page.list_complete ? null : page.cursor;
 
-  const cappedKeys = matchingKeys.slice(0, CACHE_READ_LIMIT);
-  const records = await Promise.all(cappedKeys.map((name) => env.FEEDBACKLOOP_KV.get(name, 'json')));
+  const records = await Promise.all(matchingKeys.map((name) => env.FEEDBACKLOOP_KV.get(name, 'json')));
 
   const categories = {};
   for (const cat of CATEGORY_KEYS) {
@@ -1182,9 +1183,10 @@ async function handleCachedResults(body, env) {
   // bezoekrapport, ook als er geen bruikbare opmerking in stond. Enkel
   // metadata, dus dit kost alleen list()-calls.
   let visitCursor;
-  do {
-    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'visit:', cursor: visitCursor });
-    for (const k of page.keys) {
+  let visitCount = 0;
+  if (!body.cursor) do {
+    const vPage = await env.FEEDBACKLOOP_KV.list({ prefix: 'visit:', cursor: visitCursor });
+    for (const k of vPage.keys) {
       const m = k.metadata || {};
       if (regioFilter && m.regio !== regioFilter) continue;
       if (repFilter && m.rep !== repFilter) continue;
@@ -1194,16 +1196,18 @@ async function handleCachedResults(body, env) {
       if (!maand) continue;
       if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
       perMaand[maand][m.kind === 'prospect' ? 'prospect' : 'klant']++;
+      visitCount++;
     }
-    visitCursor = page.list_complete ? undefined : page.cursor;
+    visitCursor = vPage.list_complete ? undefined : vPage.cursor;
   } while (visitCursor);
 
   return jsonResponse({
     categories,
     perMaand,
+    visitCount,
     total,
     matched: kept,
-    truncated: matchingKeys.length > cappedKeys.length,
+    nextCursor,
   });
 }
 

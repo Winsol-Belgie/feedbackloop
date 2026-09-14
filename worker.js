@@ -179,6 +179,33 @@ const ANALYSIS_TOOL = {
       prospecting: {
         type: 'object',
         properties: {
+          // Zelfde principe als customer_sentiments bij bestaande klanten:
+          // verplicht en uitputtend per id, met vaste waardes i.p.v. vrije
+          // tekst zodat het antwoord kort blijft (en dus snel en goedkoop).
+          // Dit maakt prospect-data per opmerking cachebaar, waardoor een
+          // heropload van hetzelfde bestand niets meer kost.
+          prospect_signals: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Het prospect-opmerking-id, bv. "P3".' },
+                interest: {
+                  type: 'string',
+                  enum: ['concreet', 'orienterend', 'geen'],
+                  description: '"concreet" = uitgesproken vraag/offerte/duidelijke koopintentie; "orienterend" = interesse of verkennend gesprek zonder concrete vraag; "geen" = louter bezoeknotitie zonder commercieel signaal.',
+                },
+                barrier: {
+                  type: 'string',
+                  enum: ['prijs', 'concurrent', 'budget_timing', 'technisch', 'bestaande_leverancier', 'geen'],
+                  description: 'De drempel die uit de opmerking blijkt; "geen" als er geen drempel vermeld wordt.',
+                },
+                detail: { type: 'string', description: 'Max. 1 korte zin, enkel als interest of barrier iets concreets zegt. Anders leeg laten.' },
+              },
+              required: ['id', 'interest', 'barrier', 'detail'],
+            },
+            description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd prospect-id uit "PROSPECTS" (in dezelfde volgorde, geen enkele overslaan). Genereer dit veld vóór "potential_summary" en "barriers".',
+          },
           potential_summary: { type: 'string', description: 'Narrative on the potential of prospects for this category.' },
           barriers: {
             type: 'array',
@@ -196,7 +223,7 @@ const ANALYSIS_TOOL = {
             },
           },
         },
-        required: ['potential_summary', 'barriers'],
+        required: ['prospect_signals', 'potential_summary', 'barriers'],
       },
     },
     required: ['existing_customers', 'prospecting'],
@@ -349,7 +376,8 @@ export default {
     const existing = body.existing || { remarks: [] };
     const prospecting = body.prospecting || { remarks: [], potentialSum: 0 };
     const existingFmt = formatRemarksWithIds(existing.remarks);
-    const prospectingText = formatRemarks(prospecting.remarks);
+    const prospectingFmt = formatRemarksWithIds(prospecting.remarks, 'P');
+    const prospectingText = prospectingFmt.text;
     const userMessage = buildUserMessage(category, existingFmt.text, existingFmt.ids, prospectingText, prospecting.potentialSum);
     const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
 
@@ -448,6 +476,10 @@ export default {
       };
       (toolUse.input?.existing_customers?.customer_sentiments || []).forEach(fillCustomer);
       (toolUse.input?.existing_customers?.topic_tags || []).forEach(fillCustomer);
+      const prospectNameById = new Map(prospectingFmt.ids.map((id, i) => [id, prospecting.remarks[i]?.name || '']));
+      (toolUse.input?.prospecting?.prospect_signals || []).forEach((entry) => {
+        if (entry && !entry.customer) entry.customer = prospectNameById.get(entry.id) || '';
+      });
 
       const gotIds = new Set((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => s.id));
       const missingIds = existingFmt.ids.filter((id) => !gotIds.has(id));
@@ -458,6 +490,8 @@ export default {
       // zonder "wrangler tail". Voortaan ook teruggegeven in de respons,
       // zodat de client dit kan tonen i.p.v. dat we blind moeten gokken
       // (bv. of het antwoord werd afgekapt door de max_tokens-limiet).
+      const gotProspectIds = new Set((toolUse.input?.prospecting?.prospect_signals || []).map((s) => s.id));
+      const missingProspectIds = prospectingFmt.ids.filter((id) => !gotProspectIds.has(id));
       const stopReason = data.stop_reason || '';
       if (missingIds.length) {
         console.warn(`[${category}] customer_sentiments mist ${missingIds.length}/${existingFmt.ids.length} id(s) (stop_reason: ${stopReason}): ${missingIds.join(', ')}`);
@@ -465,9 +499,8 @@ export default {
 
       // Fase 4: per-opmerking classificatie cachen in KV, zodat een latere
       // fase filterwijzigingen kan her-aggregeren zonder nieuwe AI-aanroep.
-      // Enkel "bestaande klanten" (customer_sentiments/topic_tags zijn per
-      // opmerking-id) — prospecting blijft een categorie-brede synthese
-      // zonder per-id structuur en valt hier dus nog buiten. Sleutel =
+      // Zowel bestaande klanten als prospects worden per opmerking bewaard
+      // (kind: "existing" / "prospect"), elk met hun eigen sleutel. Sleutel =
       // "key"/"sourceFile" die de client per opmerking meestuurt (zie
       // remarkCacheKey in app.js); de Worker vertrouwt die verder gewoon.
       const sentimentsById = new Map((toolUse.input?.existing_customers?.customer_sentiments || []).map((s) => [s.id, s]));
@@ -490,11 +523,13 @@ export default {
           rep: r.rep || '',
           regio: r.regio || '',
           date: r.date || '',
+          dateIso: r.dateIso || '',
           type: r.type || '',
           status: r.status || '',
           remark: r.remark || '',
           sentiment: sentimentEntry ? sentimentEntry.sentiment : null,
           tags: tagsById.get(id) || [],
+          kind: 'existing',
           storedAt: new Date().toISOString(),
         };
         // "metadata" (Fase 5) staat naast de waarde zelf en is via KV.list()
@@ -503,7 +538,43 @@ export default {
         // filteren zonder duizenden losse KV.get()'s te doen.
         cacheWrites.push(
           env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${categoryKey}:${r.key}`, JSON.stringify(record), {
-            metadata: { category: categoryKey, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '' },
+            metadata: { category: categoryKey, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '', date: r.dateIso || '', kind: 'existing' },
+          })
+        );
+      });
+
+      // Prospects krijgen dezelfde behandeling: per opmerking bewaard, met de
+      // vaste interest/barrier-classificatie. Daardoor kost een heropload van
+      // hetzelfde bestand niets meer — vóór deze wijziging gingen prospects
+      // bij élke "Opladen" opnieuw naar de AI (gemeten 14/09: een heropload
+      // zonder één nieuwe klant-opmerking kostte nog altijd $0,37 aan
+      // 22 aanroepen, volledig voor prospects).
+      const signalsById = new Map((toolUse.input?.prospecting?.prospect_signals || []).map((s) => [s.id, s]));
+      prospecting.remarks.forEach((r, i) => {
+        if (!r.key || !r.sourceFile) return;
+        const id = prospectingFmt.ids[i];
+        const sig = signalsById.get(id);
+        const record = {
+          category: categoryKey,
+          sourceFile: r.sourceFile,
+          key: r.key,
+          klant: r.name,
+          rep: r.rep || '',
+          regio: r.regio || '',
+          date: r.date || '',
+          dateIso: r.dateIso || '',
+          type: r.type || '',
+          status: r.status || '',
+          remark: r.remark || '',
+          interest: sig ? sig.interest : null,
+          barrier: sig ? sig.barrier : null,
+          detail: sig ? sig.detail || '' : '',
+          kind: 'prospect',
+          storedAt: new Date().toISOString(),
+        };
+        cacheWrites.push(
+          env.FEEDBACKLOOP_KV.put(`remark:${r.sourceFile}:${categoryKey}:${r.key}`, JSON.stringify(record), {
+            metadata: { category: categoryKey, sourceFile: r.sourceFile, klant: r.name, rep: r.rep || '', regio: r.regio || '', date: r.dateIso || '', kind: 'prospect' },
           })
         );
       });
@@ -537,8 +608,8 @@ export default {
         cache: { attempted: cacheWrites.length, succeeded: cacheSucceeded, failed: cacheFailed, firstError: cacheFirstError },
         diagnostics: {
           stopReason,
-          missingIds: missingIds.length,
-          totalIds: existingFmt.ids.length,
+          missingIds: missingIds.length + missingProspectIds.length,
+          totalIds: existingFmt.ids.length + prospectingFmt.ids.length,
           inputTokens: data.usage?.input_tokens || 0,
           outputTokens: data.usage?.output_tokens || 0,
           cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
@@ -608,7 +679,8 @@ function buildStaticInstructions() {
     'Als er geen of nauwelijks (relevante) remarks zijn, zeg dat expliciet (bv. "onvoldoende data") in plaats van iets te verzinnen.',
     'BELANGRIJK — geen absolute aantallen in "general_impression": de opmerkingen die je krijgt kunnen een deelverzameling zijn van een groter geheel voor deze categorie (grote categorieën worden in meerdere stukken tegelijk verwerkt en nadien samengevoegd — jij ziet mogelijk niet alle opmerkingen). Vermeld daarom NOOIT een concreet aantal rapporten/opmerkingen (bv. "de meeste van de 26 rapporten"), want dat aantal klopt mogelijk niet met het totaal voor de hele categorie. Gebruik in plaats daarvan relatieve bewoordingen zonder getal, zoals "de meeste opmerkingen hier", "een minderheid", of "vrijwel alle".',
     '',
-    '--- PROSPECTS: potential_summary / barriers ---',
+    '--- PROSPECTS: prospect_signals / potential_summary / barriers ---',
+    'Geef als eerste veld van "prospecting" de lijst "prospect_signals" terug: exact één entry per genummerd prospect-id bij "PROSPECTS" (elk id begint met "P", bv. "P1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Kies per id een vaste waarde voor "interest" en "barrier"; "detail" blijft leeg als er niets concreets te melden valt. Doe dit vóór de verhalende velden hieronder.',
     'Analyseer het PROSPECTS-gedeelte (potentiële klanten, nog geen bestaande klant) even grondig als de bestaande klanten — dit is geen bijzaak. In "potential_summary" geef je een feitelijke synthese van het commerciële potentieel voor deze categorie bij deze prospects: welke concrete interesse/vraag blijkt uit de opmerkingen, welke signalen wijzen op een reële kans (bv. concrete offerteaanvraag, expliciete interesse in dit product), en hoe verhoudt dat zich tot het vermelde geschatte totaalpotentieel. Als er geen of nauwelijks bruikbare prospect-opmerkingen zijn, zeg dat expliciet (bv. "onvoldoende data over prospects voor deze categorie") — laat "potential_summary" nooit leeg en verzin niets.',
     'In "barriers" groepeer je concrete drempels/obstakels die uit de prospect-opmerkingen blijken en die verklaren waarom een prospect nog niet converteert (bv. prijs te hoog, kiest voor een concurrent, wacht op budget, technische twijfel, nog in oriëntatiefase). Elke barrier krijgt een korte "label" en de exacte klantnamen die deze drempel vermelden. Verzin geen barrier zonder tekstuele basis in de opmerkingen; zijn er geen duidelijke drempels te herkennen, geef dan gewoon een lege array terug.',
   ].join('\n');
@@ -637,9 +709,9 @@ function formatRemarks(remarks) {
 // kan terugverwijzen naar welke opmerking ze classificeert, en zodat de
 // Worker achteraf kan controleren of alle ids ook echt een classificatie
 // kregen (customer_sentiments).
-function formatRemarksWithIds(remarks) {
+function formatRemarksWithIds(remarks, prefix = 'R') {
   if (!remarks || !remarks.length) return { text: '(geen)', ids: [] };
-  const ids = remarks.map((_, i) => `R${i + 1}`);
+  const ids = remarks.map((_, i) => `${prefix}${i + 1}`);
   const text = remarks.map((r, i) => `- [${ids[i]}] [${r.name}] ${r.remark}`).join('\n');
   return { text, ids };
 }
@@ -982,6 +1054,28 @@ async function handleCachedResults(body, env) {
   const regioFilter = (body.regio || '').trim();
   const repFilter = (body.rep || '').trim();
   const klantFilter = (body.klant || '').trim();
+  // Datumfilter: entries die vóór deze wijziging gecachet zijn hebben nog geen
+  // datum in hun metadata, dus daar kunnen we niet op voorfilteren. De datum
+  // staat wél altijd in de record zelf — daarom filteren we op metadata waar
+  // het kan (scheelt KV-reads) en nadien nog eens op de record, wat voor élke
+  // entry klopt.
+  const vanFilter = (body.dateFrom || '').trim();
+  const totFilter = (body.dateTo || '').trim();
+  // Entries van vóór de invoering van dateIso hebben enkel de ruwe
+  // "DD-MM-JJJJ" uit de export. Die worden door de kostenrem niet herschreven,
+  // dus zetten we ze hier alsnog om — anders zouden ze stil uit elk
+  // periodefilter en uit de grafiek vallen.
+  const isoVanRecord = (rec) => {
+    if (rec.dateIso) return rec.dateIso;
+    const m = String(rec.date || '').match(/(\d{2})-(\d{2})-(\d{4})/);
+    return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+  };
+  const inPeriode = (d) => {
+    if (!d) return !vanFilter && !totFilter;
+    if (vanFilter && d < vanFilter) return false;
+    if (totFilter && d > totFilter) return false;
+    return true;
+  };
 
   const matchingKeys = [];
   let total = 0;
@@ -994,6 +1088,7 @@ async function handleCachedResults(body, env) {
       if (regioFilter && m.regio !== regioFilter) continue;
       if (repFilter && m.rep !== repFilter) continue;
       if (klantFilter && m.klant !== klantFilter) continue;
+      if (m.date && !inPeriode(m.date)) continue;
       matchingKeys.push(k.name);
     }
     cursor = page.list_complete ? undefined : page.cursor;
@@ -1004,11 +1099,34 @@ async function handleCachedResults(body, env) {
 
   const categories = {};
   for (const cat of CATEGORY_KEYS) {
-    categories[cat] = { customers: [], topic_tags: [], customer_sentiments: [] };
+    categories[cat] = {
+      customers: [],
+      topic_tags: [],
+      customer_sentiments: [],
+      prospects: { customers: [], signals: [] },
+    };
   }
+  // Bezoeken per maand, opgesplitst klant/prospect — voedt de grafiek in de
+  // client. Kost niets extra: we lopen de records hier toch al door.
+  const perMaand = {};
+  let kept = 0;
   for (const rec of records) {
     if (!rec || !categories[rec.category]) continue;
+    const recIso = isoVanRecord(rec);
+    if (!inPeriode(recIso)) continue; // geldt ook voor entries zonder datum in metadata
+    kept++;
     const bucket = categories[rec.category];
+    const isProspect = rec.kind === 'prospect';
+    const maand = recIso.slice(0, 7); // JJJJ-MM
+    if (maand) {
+      if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
+      perMaand[maand][isProspect ? 'prospect' : 'klant']++;
+    }
+    if (isProspect) {
+      bucket.prospects.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
+      bucket.prospects.signals.push({ customer: rec.klant, interest: rec.interest, barrier: rec.barrier, detail: rec.detail || '' });
+      continue;
+    }
     bucket.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
     bucket.customer_sentiments.push({ customer: rec.klant, sentiment: rec.sentiment });
     for (const t of rec.tags || []) {
@@ -1018,8 +1136,9 @@ async function handleCachedResults(body, env) {
 
   return jsonResponse({
     categories,
+    perMaand,
     total,
-    matched: matchingKeys.length,
+    matched: kept,
     truncated: matchingKeys.length > cappedKeys.length,
   });
 }

@@ -359,6 +359,8 @@ const filterCard = document.getElementById('filterCard');
 const filterRegio = document.getElementById('filterRegio');
 const filterRep = document.getElementById('filterRep');
 const filterKlant = document.getElementById('filterKlant');
+const filterVan = document.getElementById('filterVan');
+const filterTot = document.getElementById('filterTot');
 const filterKlantList = document.getElementById('filterKlantList');
 const filterStatus = document.getElementById('filterStatus');
 const analyzeBtn = document.getElementById('analyzeBtn');
@@ -875,8 +877,15 @@ async function loadUserView() {
 // het net getoonde volledige resultaat, voor één consistent gedrag.
 // Gooit '__handled__' bij 401/403 (showLogin is dan al aangeroepen) zodat
 // de aanroeper dat geval overslaat.
-async function renderCachedFilter(regio, rep, klant) {
-  const { ok, status, data } = await authRequest({ mode: 'cached_results', regio, rep, klant });
+async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo) {
+  const { ok, status, data } = await authRequest({
+    mode: 'cached_results',
+    regio,
+    rep,
+    klant,
+    dateFrom: dateFrom || '',
+    dateTo: dateTo || '',
+  });
   if (status === 401 || status === 403) {
     showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
     throw new Error('__handled__');
@@ -888,8 +897,12 @@ async function renderCachedFilter(regio, rep, klant) {
   const agg = {};
   const aiCategories = {};
   for (const cat of Object.keys(CATEGORY_LABELS)) {
-    const c = data.categories[cat] || { customers: [], topic_tags: [], customer_sentiments: [] };
-    agg[cat] = { existing: { customers: c.customers }, prospecting: { customers: [], potentialSum: 0 } };
+    const c = data.categories[cat] || { customers: [], topic_tags: [], customer_sentiments: [], prospects: { customers: [], signals: [] } };
+    const pros = c.prospects || { customers: [], signals: [] };
+    agg[cat] = {
+      existing: { customers: c.customers },
+      prospecting: { customers: pros.customers, potentialSum: 0, signals: pros.signals },
+    };
     aiCategories[cat] = {
       existing_customers: {
         general_impression: c.customers.length
@@ -906,10 +919,11 @@ async function renderCachedFilter(regio, rep, klant) {
   lastAgg = agg;
   const globalOverview = buildGlobalOverview(agg, aiCategories);
   renderResults(agg, aiCategories, globalOverview);
+  renderVisitsChart(data.perMaand);
   const summaryEl = document.getElementById('globalSummaryText');
   if (summaryEl) {
     summaryEl.classList.remove('loading');
-    summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze weergave uit de cache. Prospecting-cijfers zijn ook niet inbegrepen — die worden nog niet per opmerking gecached.';
+    summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze weergave uit de cache — die verschijnt enkel meteen na een verse "Opladen". De cijfers, thema\'s en prospect-classificatie hieronder komen wél volledig uit de cache.';
   }
   return { matched: data.matched, total: data.total, truncated: data.truncated };
 }
@@ -917,12 +931,12 @@ async function renderCachedFilter(regio, rep, klant) {
 // Gedeelde klik-afhandeling voor "Filteren" (admin) en "Tonen" (user-rol):
 // beide doen exact hetzelfde — regio/rep/klant naar de cache sturen en het
 // resultaat renderen — enkel de knop en het statusregeltje verschillen.
-async function applyCachedFilter(regio, rep, klant, btnEl, statusEl) {
+async function applyCachedFilter(regio, rep, klant, btnEl, statusEl, dateFrom, dateTo) {
   btnEl.disabled = true;
   statusEl.textContent = 'Filter toepassen (uit cache, geen nieuwe AI-aanroep)...';
   statusEl.className = 'status';
   try {
-    const result = await renderCachedFilter(regio, rep, klant);
+    const result = await renderCachedFilter(regio, rep, klant, dateFrom, dateTo);
     statusEl.textContent =
       `${result.matched} gecachete opmerking(en) gevonden` +
       (result.truncated ? ' (resultaat afgekapt — te veel matches, verfijn de filters)' : '') +
@@ -972,7 +986,11 @@ filterBtn.addEventListener('click', async () => {
   const sourceFiles = [...new Set(parsedRows.map((r) => r['sourceFile']).filter(Boolean))];
   const candidateKeys = [];
   for (const cat of cats) {
-    for (const r of remarksForAi(agg[cat].existing.customers, cat)) {
+    const alle = [
+      ...remarksForAi(agg[cat].existing.customers, cat),
+      ...remarksForAi(agg[cat].prospecting.customers, cat),
+    ];
+    for (const r of alle) {
       if (r.key && r.sourceFile) candidateKeys.push(`remark:${r.sourceFile}:${cat}:${r.key}`);
     }
   }
@@ -1048,7 +1066,7 @@ filterBtn.addEventListener('click', async () => {
   const globalOverview = buildGlobalOverview(agg, aiCategories);
   if (uitCache) {
     try {
-      await renderCachedFilter('', '', '');
+      await renderCachedFilter('', '', '', '', '');
     } catch (err) {
       if (err.message !== '__handled__') renderResults(agg, aiCategories, globalOverview);
     }
@@ -1127,6 +1145,8 @@ filterBtn.addEventListener('click', async () => {
 filterRegio.addEventListener('change', updateFilterStatus);
 filterRep.addEventListener('change', updateFilterStatus);
 filterKlant.addEventListener('input', updateFilterStatus);
+filterVan.addEventListener('change', updateFilterStatus);
+filterTot.addEventListener('change', updateFilterStatus);
 
 // Rij voldoet aan filter Regio EN filter Sales Rep EN filter Klant — een
 // leeg filter ("Alle") legt geen voorwaarde op. Klant is een vrij
@@ -1140,6 +1160,11 @@ function matchesFilters(row) {
   if (regioVal && row['regio'] !== regioVal) return false;
   if (repVal && row['rep'] !== repVal) return false;
   if (klantVal && row['name'] !== klantVal) return false;
+  const van = filterVan.value;
+  const tot = filterTot.value;
+  const d = toIsoDate(row['date']);
+  if (van && (!d || d < van)) return false;
+  if (tot && (!d || d > tot)) return false;
   return true;
 }
 
@@ -1195,6 +1220,19 @@ function dedupeRows(rows) {
 // 10 september) — op vraag van Gwenn wordt daarvoor gewoon het huidige
 // kalenderjaar genomen. Enkel voor de periode-melding bij het inlezen;
 // de datumkolom zelf wordt nergens anders herrekend of gebruikt.
+// De export levert datums als "DD-MM-JJJJ". Datumvelden in de browser en een
+// zinvolle sortering/groepering per maand werken met "JJJJ-MM-DD", dus bewaren
+// we die genormaliseerde vorm apart naast de originele tekst. Zonder dit zou
+// een periodefilter stilzwijgend verkeerde rijen tonen (tekstvergelijking op
+// "14-09-2026" sorteert op dag, niet op jaar).
+function toIsoDate(str) {
+  const d = parseReportDate(str);
+  if (!d) return '';
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 function parseReportDate(str) {
   if (!str) return null;
   const withYear = str.match(/(\d{2})-(\d{2})-(\d{4})/);
@@ -1404,6 +1442,7 @@ function buildAggregation(rows) {
       remark,
       rep: row['rep'] || row['user'] || '',
       date: row['date'] || '',
+      dateIso: toIsoDate(row['date']),
       type: row['type'] || '',
       status: row['status'] || '',
       regio: row['regio'] || '',
@@ -1479,6 +1518,7 @@ function remarksForAi(customers, targetCat) {
       date: c.date,
       type: c.type,
       status: c.status,
+      dateIso: c.dateIso || '',
     }))
     .filter((c) => c.remark);
 }
@@ -1662,8 +1702,10 @@ async function analyzeCategory(cat, v, cachedKeys) {
   const existingAll = remarksForAi(v.existing.customers, cat).filter(
     (r) => !alreadyCached.has(`remark:${r.sourceFile}:${cat}:${r.key}`)
   );
-  const prospectingAll = remarksForAi(v.prospecting.customers, cat);
-  // Niets nieuws én geen prospects: dan valt er voor deze categorie niets te
+  const prospectingAll = remarksForAi(v.prospecting.customers, cat).filter(
+    (r) => !alreadyCached.has(`remark:${r.sourceFile}:${cat}:${r.key}`)
+  );
+  // Niets nieuws aan beide kanten: dan valt er voor deze categorie niets te
   // vragen aan de AI. Scheelt een volledige (betalende) aanroep.
   if (!existingAll.length && !prospectingAll.length) return null;
   const existingChunks = chunkArray(existingAll, BATCH_SIZE);
@@ -1701,10 +1743,76 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
   const regio = filterRegio.value;
   const rep = filterRep.value;
   const klant = filterKlant.value.trim();
-  await applyCachedFilter(regio, rep, klant, analyzeBtn, analyzeStatus);
+  const van = filterVan.value;
+  const tot = filterTot.value;
+  if (van && tot && van > tot) {
+    analyzeStatus.textContent = '"Vanaf" ligt na "tot en met" — draai de datums om.';
+    analyzeStatus.className = 'status err';
+    return;
+  }
+  await applyCachedFilter(regio, rep, klant, analyzeBtn, analyzeStatus, van, tot);
+  const periode = van || tot ? ` · periode: ${van || '…'} t/m ${tot || '…'}` : '';
   setCollapsed(filterBody, filterToggle, filterSummary, true,
-    `Filter: regio: ${regio || 'alle'} · rep: ${rep || 'alle'} · klant: ${klant || 'alle'}`);
+    `Filter: regio: ${regio || 'alle'} · rep: ${rep || 'alle'} · klant: ${klant || 'alle'}${periode}`);
 });
+
+// Bezoeken per maand, gestapeld klant/prospect. De cijfers komen uit
+// handleCachedResults (die telt ze toch al bij het doorlopen van de records),
+// dus dit kost geen extra KV-reads en zeker geen AI-aanroep.
+const MAAND_NAMEN = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+function renderVisitsChart(perMaand) {
+  const card = document.getElementById('visitsCard');
+  const host = document.getElementById('visitsChart');
+  if (!card || !host) return;
+  const maanden = Object.keys(perMaand || {}).filter(Boolean).sort();
+  if (!maanden.length) {
+    card.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  const rijen = maanden.map((m) => {
+    const v = perMaand[m] || { klant: 0, prospect: 0 };
+    return { maand: m, klant: v.klant || 0, prospect: v.prospect || 0, totaal: (v.klant || 0) + (v.prospect || 0) };
+  });
+  const max = Math.max(...rijen.map((r) => r.totaal), 1);
+  const totKlant = rijen.reduce((s, r) => s + r.klant, 0);
+  const totProspect = rijen.reduce((s, r) => s + r.prospect, 0);
+
+  const kolommen = rijen
+    .map((r) => {
+      // Hoogtes als percentage van de hoogste maand; de staaf zelf vult de
+      // kolom van onder naar boven.
+      const hKlant = (r.klant / max) * 100;
+      const hProspect = (r.prospect / max) * 100;
+      const titel = `${maandLabel(r.maand)}: ${r.totaal} bezoek(en) — ${r.klant} klant, ${r.prospect} prospect`;
+      return `<div class="visits-col" title="${escapeAttr(titel)}">
+        <span class="visits-total">${r.totaal}</span>
+        <div class="visits-stack">
+          ${r.prospect ? `<div class="visits-seg prospect" style="height:${hProspect}%"></div>` : ''}
+          ${r.klant ? `<div class="visits-seg klant" style="height:${hKlant}%"></div>` : ''}
+        </div>
+      </div>`;
+    })
+    .join('');
+  const labels = rijen.map((r) => `<div class="visits-label">${escapeHtml(maandLabel(r.maand))}</div>`).join('');
+
+  host.className = 'visits';
+  host.innerHTML = `
+    <div class="visits-legend">
+      <span><i class="visits-swatch" style="background:var(--klant)"></i>Klant (${totKlant})</span>
+      <span><i class="visits-swatch" style="background:var(--prospect)"></i>Prospect (${totProspect})</span>
+    </div>
+    <div class="visits-plot">${kolommen}</div>
+    <div class="visits-labels">${labels}</div>`;
+  card.hidden = false;
+}
+
+function maandLabel(jjjjMm) {
+  const [jaar, maand] = (jjjjMm || '').split('-');
+  const idx = parseInt(maand, 10) - 1;
+  if (!jaar || Number.isNaN(idx) || !MAAND_NAMEN[idx]) return jjjjMm || '';
+  return `${MAAND_NAMEN[idx]} ${jaar.slice(2)}`;
+}
 
 function showProgress(done, total) {
   const bar = document.getElementById('progressBar');
@@ -1787,6 +1895,7 @@ function renderResults(agg, aiCategories, globalOverview) {
           <div class="stat"><b>&euro;${Math.round(stats.prospecting.potentialSum).toLocaleString('nl-BE')}</b><span>totaal potentieel (schatting)</span></div>
         </div>
         ${renderCustomerList(stats.prospecting.customers, 'Bekijk welke prospects', cat, 'prospecting')}
+        ${renderProspectSignals(stats.prospecting.signals, cat)}
         <p class="narrative">${escapeHtml(prospAi.potential_summary || 'Geen data beschikbaar.')}</p>
         <h2 class="part-title" style="margin-top:18px;">Drempels om over te stappen</h2>
         ${renderThemes(prospAi.barriers, cat, 'prospecting')}
@@ -1803,6 +1912,52 @@ function renderResults(agg, aiCategories, globalOverview) {
 // enkel relevant binnen een HTML-attribuut, niet in tekstinhoud). Voor de
 // data-* attributen hieronder (klantnaam kan een " of ' bevatten) is dat
 // wél nodig, anders breekt het attribuut. Vandaar een aparte helper.
+// Vaste classificatie per prospect-opmerking (zie prospect_signals in
+// worker.js). Komt uit de cache, dus dit blok verschijnt ook bij "Filteren"
+// zonder nieuwe AI-aanroep.
+const INTEREST_LABELS = { concreet: 'Concrete vraag', orienterend: 'Oriënterend', geen: 'Geen signaal' };
+const BARRIER_LABELS = {
+  prijs: 'Prijs',
+  concurrent: 'Concurrent',
+  budget_timing: 'Budget of timing',
+  technisch: 'Technisch',
+  bestaande_leverancier: 'Bestaande leverancier',
+  geen: 'Geen drempel vermeld',
+};
+function renderProspectSignals(signals, cat) {
+  if (!signals || !signals.length) return '';
+  const perInteresse = {};
+  const perDrempel = new Map();
+  for (const s of signals) {
+    if (!s) continue;
+    const i = s.interest || 'geen';
+    perInteresse[i] = (perInteresse[i] || 0) + 1;
+    const b = s.barrier || 'geen';
+    if (b === 'geen') continue;
+    if (!perDrempel.has(b)) perDrempel.set(b, { klanten: new Set(), details: [] });
+    const bucket = perDrempel.get(b);
+    if (s.customer) bucket.klanten.add(s.customer);
+    if (s.detail) bucket.details.push(s.detail);
+  }
+  const volgorde = ['concreet', 'orienterend', 'geen'];
+  const tellers = volgorde
+    .filter((k) => perInteresse[k])
+    .map((k) => `<div class="stat"><b>${perInteresse[k]}</b><span>${escapeHtml(INTEREST_LABELS[k])}</span></div>`)
+    .join('');
+  const drempels = [...perDrempel.entries()]
+    .sort((a, b) => b[1].klanten.size - a[1].klanten.size)
+    .map(([key, v]) => {
+      const namen = [...v.klanten];
+      const detail = v.details.length ? `<span class="pill neutral">${escapeHtml(v.details[0])}</span>` : '';
+      return renderDetailsBlock(BARRIER_LABELS[key] || key, namen, detail, cat, 'prospecting');
+    })
+    .join('');
+  return `
+    <h2 class="part-title" style="margin-top:18px;">Interesse per prospect</h2>
+    <div class="stat-row">${tellers || '<div class="stat"><b>—</b><span>geen classificatie</span></div>'}</div>
+    ${drempels ? `<h2 class="part-title" style="margin-top:18px;">Drempels (per opmerking geclassificeerd)</h2>${drempels}` : ''}`;
+}
+
 function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }

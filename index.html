@@ -35,6 +35,23 @@ button{font-family:inherit;}
 .status{font-size:13px;color:var(--ink-faint);}
 .status.err{color:var(--bad);}
 .progress-track{background:var(--line);border-radius:8px;height:8px;overflow:hidden;margin-top:12px;}
+/* Bezoeken per maand: gestapelde staven. Kleuren gevalideerd op
+   kleurenblindheid en contrast (CVD dE 21.7, beide >=3:1 op de kaartachtergrond). */
+.visits{--klant:#1268A8;--prospect:#C96A22;}
+.visits-legend{display:flex;gap:16px;align-items:center;justify-content:flex-end;margin-bottom:10px;font-size:13px;color:var(--muted);}
+.visits-legend span{display:inline-flex;align-items:center;gap:6px;}
+.visits-swatch{width:10px;height:10px;border-radius:3px;display:inline-block;}
+.visits-plot{display:flex;align-items:flex-end;gap:10px;height:220px;padding-top:18px;border-bottom:1px solid var(--line);overflow-x:auto;}
+.visits-col{flex:1 1 0;min-width:34px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;}
+.visits-total{font-size:12px;color:var(--muted);margin-bottom:4px;font-variant-numeric:tabular-nums;}
+.visits-stack{width:100%;max-width:46px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;height:100%;}
+.visits-seg{width:100%;border-radius:4px 4px 0 0;min-height:2px;}
+.visits-seg.klant{background:var(--klant);}
+.visits-seg.prospect{background:var(--prospect);}
+.visits-stack .visits-seg:not(:first-child){border-radius:0;}
+.visits-labels{display:flex;gap:10px;margin-top:8px;}
+.visits-label{flex:1 1 0;min-width:34px;text-align:center;font-size:12px;color:var(--muted);line-height:1.35;}
+.visits-empty{color:var(--muted);font-size:14px;padding:12px 0;}
 .progress-fill{background:var(--accent);height:100%;width:0%;transition:width .25s ease;}
 #results{display:none;}
 .tabs{display:flex;gap:8px;margin-bottom:18px;}
@@ -278,6 +295,14 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
           <input id="filterKlant" list="filterKlantList" placeholder="Alle" autocomplete="off">
           <datalist id="filterKlantList"></datalist>
         </label>
+        <label class="filter-field">
+          <span>Vanaf (datum)</span>
+          <input id="filterVan" type="date">
+        </label>
+        <label class="filter-field">
+          <span>Tot en met (datum)</span>
+          <input id="filterTot" type="date">
+        </label>
       </div>
       <p class="status" id="filterStatus"></p>
       <h2 class="part-title" style="margin-top:20px;"><span class="step-label">Stap 2</span>Filteren</h2>
@@ -286,6 +311,18 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
         <span class="status" id="analyzeStatus"></span>
       </div>
       <div class="progress-track" id="progressBar" hidden><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+  </div>
+
+  <div class="card" id="visitsCard" hidden>
+    <div class="card-head">
+      <p class="collapse-summary" id="visitsSummary" hidden></p>
+      <button class="collapse-toggle" id="visitsToggle" type="button" aria-expanded="true" aria-controls="visitsBody" aria-label="Sectie in-/uitklappen">&#9662;</button>
+    </div>
+    <div id="visitsBody">
+      <h2 class="part-title">Bezoeken per maand</h2>
+      <p class="part-sub">Aantal bezoekrapporten per maand, opgesplitst tussen bestaande klanten en prospects. Volgt de filters hierboven; zonder filter is dit de volledige cache.</p>
+      <div id="visitsChart"></div>
     </div>
   </div>
 
@@ -333,6 +370,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609140900"></script>
+<script src="app.js?v=202609141000"></script>
 </body>
 </html>

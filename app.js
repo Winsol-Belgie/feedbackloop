@@ -2266,11 +2266,33 @@ function buildGlobalOverview(agg, aiCategories) {
       if (!t || !t.domain || !t.topic) continue;
       const key = `${t.domain}|${t.topic}`;
       if (!byTopic.has(key)) {
-        byTopic.set(key, { domain: t.domain, topic: t.topic, posCustomers: new Set(), negCustomers: new Set() });
+        byTopic.set(key, {
+          domain: t.domain,
+          topic: t.topic,
+          posCustomers: new Set(),
+          negCustomers: new Set(),
+          // Per klant de concrete "detail"-zinnetjes bijhouden. Zonder dit
+          // klapte een onderwerp op het globaal tab open naar kale namen,
+          // terwijl de categorietabs wél tonen wát die klant zei.
+          posDetails: new Map(),
+          negDetails: new Map(),
+        });
       }
       const b = byTopic.get(key);
-      if (t.customer && t.sentiment === 'positive') b.posCustomers.add(t.customer);
-      if (t.customer && t.sentiment === 'negative') b.negCustomers.add(t.customer);
+      const bewaarDetail = (kaart, klant, detail) => {
+        if (!klant || !detail) return;
+        if (!kaart.has(klant)) kaart.set(klant, []);
+        const lijst = kaart.get(klant);
+        if (!lijst.includes(detail)) lijst.push(detail);
+      };
+      if (t.customer && t.sentiment === 'positive') {
+        b.posCustomers.add(t.customer);
+        bewaarDetail(b.posDetails, t.customer, t.detail);
+      }
+      if (t.customer && t.sentiment === 'negative') {
+        b.negCustomers.add(t.customer);
+        bewaarDetail(b.negDetails, t.customer, t.detail);
+      }
 
       // Concurrenten worden sinds 14/09 bij élk onderwerp vastgelegd, niet enkel
       // bij een prijsvergelijking — en we houden bij in welke productcategorieën
@@ -2285,17 +2307,40 @@ function buildGlobalOverview(agg, aiCategories) {
       }
     }
 
-    for (const { domain, topic, posCustomers, negCustomers } of byTopic.values()) {
+    // Zet een klantenverzameling om in [{ naam, details }] — de volgorde van
+    // de namen blijft behouden, de details komen uit één of meer kaarten.
+    const metDetails = (klanten, ...kaarten) => [...klanten].map((naam) => {
+      const details = [];
+      for (const kaart of kaarten) {
+        for (const d of (kaart.get(naam) || [])) if (!details.includes(d)) details.push(d);
+      }
+      return { naam, details };
+    });
+
+    for (const { domain, topic, posCustomers, negCustomers, posDetails, negDetails } of byTopic.values()) {
       const topicLabel = (TAXONOMY[domain] && TAXONOMY[domain].topics[topic]) || topic;
       if (domain === 'product_techniek' && topic === 'feature_wens') {
         if (posCustomers.size || negCustomers.size) {
-          allWishes.push({ cat, label, text: topicLabel, count: posCustomers.size + negCustomers.size, klanten: [...new Set([...posCustomers, ...negCustomers])] });
+          const alle = new Set([...posCustomers, ...negCustomers]);
+          allWishes.push({
+            cat, label, text: topicLabel, count: alle.size,
+            klanten: [...alle],
+            klantDetails: metDetails(alle, posDetails, negDetails),
+          });
         }
         continue;
       }
       if (!ROADMAP_DOMAINS.includes(domain)) continue;
-      if (negCustomers.size) allIssues.push({ cat, label, text: topicLabel, count: negCustomers.size, klanten: [...negCustomers] });
-      if (posCustomers.size) allPositive.push({ cat, label, text: topicLabel, count: posCustomers.size, klanten: [...posCustomers] });
+      if (negCustomers.size) allIssues.push({
+        cat, label, text: topicLabel, count: negCustomers.size,
+        klanten: [...negCustomers],
+        klantDetails: metDetails(negCustomers, negDetails),
+      });
+      if (posCustomers.size) allPositive.push({
+        cat, label, text: topicLabel, count: posCustomers.size,
+        klanten: [...posCustomers],
+        klantDetails: metDetails(posCustomers, posDetails),
+      });
     }
 
     // Drempels komen nu uit de vaste classificatie per prospect-opmerking (die
@@ -2447,15 +2492,21 @@ function renderGlobalSection(overview) {
       </div>`).join('');
   };
 
-  // Per categorie de top 3, openklapbaar met klantnamen — dezelfde
-  // detailweergave als op de categorietabs, dus een klik opent het volledige
-  // bezoekrapport van die klant.
+  // Per categorie de top 3, openklapbaar met per klant het concrete
+  // detail-zinnetje — dezelfde opbouw als op de categorietabs. De naam blijft
+  // klikbaar en opent het volledige bezoekrapport van die klant.
   const perCategorieBlok = (groepen, badgeClass, badgeText, emptyText) => {
     if (!groepen.length) return `<p class="narrative">${emptyText}</p>`;
     return groepen.map((g) => `
       <h3 class="part-subtitle">${escapeHtml(g.label)}</h3>
       ${g.items.map((it) =>
-        renderDetailsBlock(it.text, it.klanten || [], `<span class="pill ${badgeClass}">${badgeText}</span>`, g.cat, 'existing')
+        renderDetailsBlockMetUitleg(
+          it.text,
+          it.klantDetails || (it.klanten || []).map((naam) => ({ naam, details: [] })),
+          `<span class="pill ${badgeClass}">${badgeText}</span>`,
+          g.cat,
+          'existing'
+        )
       ).join('')}`).join('');
   };
 
@@ -2554,6 +2605,30 @@ function renderDetailsBlock(label, names, badgeHtml, cat, part) {
       <summary>
         <span class="theme-label">${escapeHtml(label || '')}</span>
         <span class="theme-badges">${badgeHtml} <span class="count-badge">${names.length}</span></span>
+      </summary>
+      ${inner}
+    </details>
+  `;
+}
+
+// Zoals renderDetailsBlock, maar met per klant de concrete "detail"-zinnen
+// eronder — dezelfde opbouw als renderTopicBlock op de categorietabs. Het
+// globaal tab toonde enkel namen, waardoor je wel zag wíé iets zei maar niet
+// wát. Valt terug op een kale naam wanneer er voor die klant geen detail is.
+function renderDetailsBlockMetUitleg(label, klantDetails, badgeHtml, cat, part) {
+  const lijst = klantDetails || [];
+  const items = lijst.map(({ naam, details }) => {
+    const detailsHtml = (details && details.length)
+      ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
+      : '';
+    return `<div>${customerLinkHtml(naam, cat, part)}${detailsHtml}</div>`;
+  }).join('');
+  const inner = items ? `<div class="customer-list">${items}</div>` : '';
+  return `
+    <details class="theme-details">
+      <summary>
+        <span class="theme-label">${escapeHtml(label || '')}</span>
+        <span class="theme-badges">${badgeHtml} <span class="count-badge">${lijst.length}</span></span>
       </summary>
       ${inner}
     </details>

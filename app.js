@@ -1081,8 +1081,10 @@ filterBtn.addEventListener('click', async () => {
       if (cachedKeys.has(naam)) teVerrijken.push({ name: naam, potential: r.potential });
     }
   }
+  let verrijkt = 0;
   for (let i = 0; i < teVerrijken.length; i += 150) {
-    await authRequest({ mode: 'enrich_records', updates: teVerrijken.slice(i, i + 150) });
+    const res = await authRequest({ mode: 'enrich_records', updates: teVerrijken.slice(i, i + 150) });
+    verrijkt += (res.data && res.data.patched) || 0;
   }
 
   // Elk bezoekrapport apart registreren, los van de AI-analyse. De
@@ -1103,10 +1105,12 @@ filterBtn.addEventListener('click', async () => {
       dateIso: toIsoDate(r['date'], r['sourceFile']),
       kind: isExisting(r) ? 'existing' : 'prospect',
     }));
+  let bezoekenGeregistreerd = 0;
   if (visits.length) {
     // Mislukt dit, dan blijft de analyse gewoon doorgaan: enkel de grafiek is
     // dan onvolledig.
-    await authRequest({ mode: 'store_visits', visits });
+    const res = await authRequest({ mode: 'store_visits', visits });
+    bezoekenGeregistreerd = (res.data && res.data.stored) || 0;
   }
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
@@ -1202,10 +1206,12 @@ filterBtn.addEventListener('click', async () => {
   // AI-verbruik + accountlimiet tonen: zo is meteen zichtbaar of een trage run
   // aan de hoeveelheid werk lag of aan de rate limit van het Anthropic-account.
   const hergebruikNote = hergebruikt
-    ? ` ${hergebruikt} opmerking(en) stonden al in de cache en kostten niets; ${nieuw} nieuw geanalyseerd.` +
-      ' De weergave hieronder komt daarom volledig uit de cache — dus zonder de verhalende AI-samenvattingen,' +
-      ' die enkel bij een volledig verse analyse verschijnen.'
+    ? ` ${hergebruikt} opmerking(en) stonden al in de cache en kostten niets; ${nieuw} nieuw geanalyseerd.`
     : '';
+  const bijwerkDelen = [];
+  if (bezoekenGeregistreerd) bijwerkDelen.push(`${bezoekenGeregistreerd} bezoek(en) geregistreerd`);
+  if (verrijkt) bijwerkDelen.push(`${verrijkt} record(s) aangevuld met een €-waarde`);
+  const bijwerkNote = bijwerkDelen.length ? ` Zonder AI-kost: ${bijwerkDelen.join(' en ')}.` : '';
   let usageNote = '';
   if (aiUsageStats.calls) {
     const duurSec = aiUsageStats.startedAt ? Math.round((Date.now() - aiUsageStats.startedAt) / 1000) : 0;
@@ -1227,9 +1233,9 @@ filterBtn.addEventListener('click', async () => {
     usageNote += ` — ± $${kosten.toFixed(2)}.`;
   }
   if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${hergebruikNote}${usageNote}`, true);
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${hergebruikNote}${bijwerkNote}${usageNote}`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}${hergebruikNote}${usageNote}`, !!cacheNote || !!aiNote);
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}${hergebruikNote}${bijwerkNote}${usageNote}`, !!cacheNote || !!aiNote);
   }
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.

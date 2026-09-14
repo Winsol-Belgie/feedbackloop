@@ -150,6 +150,12 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 .score-value.neg{color:var(--bad);}
 .score-warn{font-size:11px;color:var(--ink-faint);min-width:120px;}
 .score-list{display:flex;flex-direction:column;gap:2px;}
+/* Totaalrij over alle productgroepen: bewust fysiek gescheiden van de
+   categorielijst erboven, zodat niemand hem als achtste categorie leest. */
+.score-total-wrap{margin-top:14px;padding-top:12px;border-top:2px solid var(--ink-faint);}
+.score-row.score-total .score-label{font-weight:700;color:var(--ink);}
+.score-row.score-total{border-bottom:none;}
+h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14px 0 6px;}
 .ranked-row{display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);}
 .ranked-row:last-child{border-bottom:none;}
 .ranked-cat{flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:2px 9px;font-size:11px;color:var(--ink-soft);white-space:nowrap;}
@@ -363,6 +369,8 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
     <p class="status" id="cacheStats">Cache-inhoud wordt geladen...</p>
     <div class="row">
       <button class="btn danger" id="cacheResetBtn" type="button">Cache volledig wissen</button>
+      <button class="btn" id="cacheResetExistingBtn" type="button" style="margin-left:10px;">Klant-classificaties wissen (prospects behouden)</button>
+      <p class="status" id="cacheResetExistingStatus"></p>
       <span class="status" id="cacheStatus"></span>
     </div>
   </div>
@@ -381,6 +389,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609142000"></script>
+<script src="app.js?v=202609142100"></script>
 </body>
 </html>

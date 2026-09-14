@@ -164,7 +164,7 @@ const ANALYSIS_TOOL = {
                 topic: { type: 'string', enum: TOPIC_KEYS, description: 'Vast onderwerp uit de taxonomie — zie prompt.' },
                 sentiment: { type: 'string', enum: ['positive', 'negative', 'neutral'], description: 'Sentiment t.o.v. dit specifieke onderwerp (niet de klant in het algemeen).' },
                 detail: { type: 'string', description: 'Korte, concrete beschrijving (max. 1 zin) van wat deze opmerking hierover zegt — geen vage samenvatting.' },
-                competitor: { type: 'string', description: 'Enkel bij topic "prijsvergelijking": naam van de vermelde concurrent. Leeg laten indien niet van toepassing of niet genoemd.' },
+                competitor: { type: 'string', description: 'Naam van de concurrent die in dit fragment genoemd wordt in verband met dit onderwerp — niet enkel bij een prijsvergelijking, maar ook bij bv. levertermijn, kwaliteit of service. Leeg laten als er geen concurrent bij naam genoemd wordt.' },
               },
               required: ['id', 'domain', 'topic', 'sentiment', 'detail'],
             },
@@ -345,6 +345,9 @@ export default {
     }
     if (body.mode === 'cache_reset') {
       return handleCacheReset(env);
+    }
+    if (body.mode === 'cache_reset_existing') {
+      return handleCacheResetExisting(env);
     }
 
     if (!env.ANTHROPIC_API_KEY) {
@@ -687,7 +690,7 @@ function buildStaticInstructions() {
     'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
     buildTaxonomyBlock(),
     '',
-    'Voor elke tag geef je: het opmerking-id, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Bij onderwerp "prijsvergelijking" vermeld je in "competitor" de naam van de concurrent indien genoemd (leeg laten indien niet van toepassing).',
+    'Voor elke tag geef je: het opmerking-id, het domein, het onderwerp, een sentiment ("positive"/"negative"/"neutral" — t.o.v. DIT specifieke onderwerp, niet de klant in het algemeen), en een korte "detail"-tekst (max. 1 zin, concreet en specifiek — bv. "PVC levertermijn nu 8-10 weken i.p.v. gebruikelijke 5 weken", NIET "levertermijn is een probleem"). Noemt de opmerking een concurrent bij naam in verband met dit onderwerp, vul die dan in bij "competitor" — dat geldt voor élk onderwerp, niet enkel voor een prijsvergelijking (ook bv. "X levert binnen de week" of "Y heeft betere service"). Geen concurrent genoemd: leeg laten.',
     'BELANGRIJK: verzin geen tag of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Geef nooit de klantnaam mee — het id volstaat, de tool vult de naam zelf aan. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     '--- PROSPECTS: prospect_signals ---',
@@ -925,6 +928,35 @@ async function handleAdminUpsertUsers(body, env) {
 // overslaat: zonder deze stap zouden records die vóór een uitbreiding
 // weggeschreven zijn dat veld nooit krijgen, tenzij je de hele maand opnieuw
 // (en betalend) zou laten analyseren. De classificatie zelf blijft ongemoeid.
+// Wist enkel de classificaties van BESTAANDE KLANTEN; prospects blijven staan.
+// Nodig na een uitbreiding van wat de AI per klantopmerking moet vastleggen
+// (14/09: de concurrentnaam wordt voortaan bij elk onderwerp gevraagd, niet
+// enkel bij een prijsvergelijking). Na deze actie ziet de kostenrem die
+// opmerkingen als nieuw en analyseert ze opnieuw bij de eerstvolgende upload
+// — enkel klantopmerkingen dus, want de concurrentnaam hangt aan topic_tags en
+// die bestaan alleen voor bestaande klanten.
+//
+// De selectie gebeurt op metadata, zonder de records te lezen: prospect-records
+// zijn pas ingevoerd nádat het veld "kind" bestond, dus alles zonder dat veld
+// is per definitie een klantrecord.
+async function handleCacheResetExisting(env) {
+  let cursor;
+  let verwijderd = 0;
+  let behouden = 0;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    const teWissen = [];
+    for (const k of page.keys) {
+      if ((k.metadata || {}).kind === 'prospect') behouden++;
+      else teWissen.push(k.name);
+    }
+    const settled = await Promise.allSettled(teWissen.map((n) => env.FEEDBACKLOOP_KV.delete(n)));
+    verwijderd += settled.filter((s) => s.status === 'fulfilled').length;
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return jsonResponse({ verwijderd, behouden });
+}
+
 async function handleEnrichRecords(body, env) {
   const updates = Array.isArray(body.updates) ? body.updates : [];
   if (!updates.length) return jsonResponse({ patched: 0 });

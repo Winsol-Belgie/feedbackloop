@@ -418,6 +418,8 @@ const usersUpdateBtn = document.getElementById('usersUpdateBtn');
 const usersStatus = document.getElementById('usersStatus');
 const cacheCard = document.getElementById('cacheCard');
 const cacheResetBtn = document.getElementById('cacheResetBtn');
+const cacheResetExistingBtn = document.getElementById('cacheResetExistingBtn');
+const cacheResetExistingStatus = document.getElementById('cacheResetExistingStatus');
 const cacheStatus = document.getElementById('cacheStatus');
 const cacheStats = document.getElementById('cacheStats');
 const usersBody = document.getElementById('usersBody');
@@ -787,6 +789,42 @@ async function loadCacheStats() {
   }
 }
 
+// Eenmalige actie na een uitbreiding van wat de AI per klantopmerking moet
+// vastleggen (14/09: de concurrentnaam bij élk onderwerp, niet enkel bij een
+// prijsvergelijking). Wist enkel de klant-classificaties; prospects blijven
+// staan, want die dragen geen thema-tags en dus ook geen concurrentnaam.
+// Daarna worden de klantopmerkingen bij de eerstvolgende upload per maand
+// opnieuw geanalyseerd — de prospects blijven gratis uit de cache komen.
+cacheResetExistingBtn.addEventListener('click', async () => {
+  if (!confirm('Alle classificaties van BESTAANDE KLANTEN wissen? Prospects blijven behouden. Je moet daarna elk maandbestand één keer opnieuw opladen; enkel de klantopmerkingen worden dan opnieuw geanalyseerd (raming: ongeveer 2 euro in totaal). Doorgaan?')) {
+    return;
+  }
+  cacheResetExistingBtn.disabled = true;
+  cacheResetExistingStatus.textContent = 'Bezig met wissen...';
+  cacheResetExistingStatus.className = 'status';
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'cache_reset_existing' });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      cacheResetExistingStatus.textContent = (data && data.error) || 'Wissen mislukt.';
+      cacheResetExistingStatus.className = 'status err';
+    } else {
+      cacheResetExistingStatus.textContent =
+        `${data.verwijderd} klant-classificatie(s) gewist, ${data.behouden} prospect-record(s) behouden. ` +
+        'Laad nu elk maandbestand één keer opnieuw op.';
+      cacheResetExistingStatus.className = 'status';
+    }
+  } catch (err) {
+    cacheResetExistingStatus.textContent = 'Wissen mislukt: ' + err.message;
+    cacheResetExistingStatus.className = 'status err';
+  } finally {
+    cacheResetExistingBtn.disabled = false;
+  }
+});
+
 cacheResetBtn.addEventListener('click', async () => {
   if (!confirm('Volledige cache wissen? Bij de volgende analyse wordt alles opnieuw door de AI verwerkt. Gebruikersaccounts blijven behouden. Doorgaan?')) {
     return;
@@ -952,11 +990,6 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgres
   const globalOverview = buildGlobalOverview(agg, aiCategories);
   renderResults(agg, aiCategories, globalOverview);
   renderVisitsChart(data.perMaand, data.visitsGeschat);
-  const summaryEl = document.getElementById('globalSummaryText');
-  if (summaryEl) {
-    summaryEl.classList.remove('loading');
-    summaryEl.textContent = 'Automatische samenvatting is niet beschikbaar in deze weergave uit de cache — die verschijnt enkel meteen na een verse "Opladen". De cijfers, thema\'s en prospect-classificatie hieronder komen wél volledig uit de cache.';
-  }
   return { matched: data.matched, total: data.total, visitCount: data.visitCount };
 }
 
@@ -1249,7 +1282,6 @@ filterBtn.addEventListener('click', async () => {
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
   setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
-  if (!uitCache && Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
   loadCacheStats();
 });
 
@@ -2123,9 +2155,8 @@ function escapeAttr(str) {
 
 /* --- Globale barometer (cross-categorie) ---------------------------------
  * Volledig opgebouwd uit de al opgehaalde per-categorie resultaten (agg +
- * aiCategories) — geen extra AI-aanroep nodig voor de cijfers zelf. Enkel
- * de lopende samenvattende tekst (loadGlobalSummary) is 1 kleine extra,
- * apart ladende aanroep naar de Worker (mode: 'global_summary').
+ * aiCategories) — geen enkele AI-aanroep. Alles komt uit de KV, dus dit tab
+ * werkt identiek voor een user als voor een admin.
  *
  * Score per categorie is bewust gebaseerd op AANTAL UNIEKE KLANTEN achter
  * positieve/negatieve thema's, niet op aantal thema's — anders weegt 1
@@ -2191,10 +2222,24 @@ function buildGlobalOverview(agg, aiCategories) {
     }
 
     const sampleSize = anySet.size;
-    const totalCustomers = stats.existing.customers.length;
+    // Noemer telt UNIEKE klanten, niet opmerkingen. Stond eerder op
+    // stats.existing.customers.length — het aantal records — waardoor een klant
+    // met drie opmerkingen drie keer meetelde. Teller en noemer zetten nu
+    // allebei klanten tegenover klanten ("43 van de 95 klanten").
+    const totalCustomers = new Set(stats.existing.customers.map((k) => k.name).filter(Boolean)).size;
     const score = sampleSize ? (posSet.size - negSet.size) / sampleSize : null;
 
-    perCategory.push({ cat, label, score, sampleSize, totalCustomers });
+    const prospectKlanten = new Set((stats.prospecting.customers || []).map((k) => k.name).filter(Boolean));
+    perCategory.push({
+      cat,
+      label,
+      score,
+      sampleSize,
+      totalCustomers,
+      prospects: prospectKlanten.size,
+      prospectNamen: [...prospectKlanten],
+      potentialSum: stats.prospecting.potentialSum || 0,
+    });
 
     // Groepeer topic_tags per domein+onderwerp (binnen deze categorie) om
     // per onderwerp het aantal unieke klanten met een positieve/negatieve
@@ -2212,11 +2257,15 @@ function buildGlobalOverview(agg, aiCategories) {
       if (t.customer && t.sentiment === 'positive') b.posCustomers.add(t.customer);
       if (t.customer && t.sentiment === 'negative') b.negCustomers.add(t.customer);
 
-      if (t.domain === 'prijs_concurrentie' && t.topic === 'prijsvergelijking' && t.competitor) {
+      // Concurrenten worden sinds 14/09 bij élk onderwerp vastgelegd, niet enkel
+      // bij een prijsvergelijking — en we houden bij in welke productcategorieën
+      // ze genoemd worden, zodat zichtbaar is waar iemand wél en niet concurreert.
+      if (t.competitor) {
         const comp = t.competitor.trim();
         if (comp) {
-          if (!competitorCustomers.has(comp)) competitorCustomers.set(comp, new Set());
-          if (t.customer) competitorCustomers.get(comp).add(t.customer);
+          if (!competitorCustomers.has(comp)) competitorCustomers.set(comp, { klanten: new Set(), categorieen: new Set() });
+          if (t.customer) competitorCustomers.get(comp).klanten.add(t.customer);
+          competitorCustomers.get(comp).categorieen.add(label);
         }
       }
     }
@@ -2225,13 +2274,13 @@ function buildGlobalOverview(agg, aiCategories) {
       const topicLabel = (TAXONOMY[domain] && TAXONOMY[domain].topics[topic]) || topic;
       if (domain === 'product_techniek' && topic === 'feature_wens') {
         if (posCustomers.size || negCustomers.size) {
-          allWishes.push({ cat, label, text: topicLabel, count: posCustomers.size + negCustomers.size });
+          allWishes.push({ cat, label, text: topicLabel, count: posCustomers.size + negCustomers.size, klanten: [...new Set([...posCustomers, ...negCustomers])] });
         }
         continue;
       }
       if (!ROADMAP_DOMAINS.includes(domain)) continue;
-      if (negCustomers.size) allIssues.push({ cat, label, text: topicLabel, count: negCustomers.size });
-      if (posCustomers.size) allPositive.push({ cat, label, text: topicLabel, count: posCustomers.size });
+      if (negCustomers.size) allIssues.push({ cat, label, text: topicLabel, count: negCustomers.size, klanten: [...negCustomers] });
+      if (posCustomers.size) allPositive.push({ cat, label, text: topicLabel, count: posCustomers.size, klanten: [...posCustomers] });
     }
 
     // Drempels komen nu uit de vaste classificatie per prospect-opmerking (die
@@ -2260,15 +2309,52 @@ function buildGlobalOverview(agg, aiCategories) {
   allBarriers.sort(byCountDesc);
 
   const topCompetitors = [...competitorCustomers.entries()]
-    .map(([name, set]) => ({ name, count: set.size }))
+    .map(([name, v]) => ({ name, count: v.klanten.size, categorieen: [...v.categorieen] }))
     .sort(byCountDesc)
     .slice(0, 8);
 
+  // Totaalscore over alle productgroepen: gewogen gemiddelde van de
+  // categoriescores, waarbij elke categorie meeweegt naar het aantal klanten
+  // met een uitgesproken mening. Een categorie waarover maar twee klanten iets
+  // zeiden, trekt de totaalscore dus niet even hard als een categorie met
+  // dertig — wat bij een gewoon gemiddelde wél zou gebeuren.
+  const metScore = perCategory.filter((c) => c.score !== null && c.sampleSize > 0);
+  const totaalSample = metScore.reduce((s, c) => s + c.sampleSize, 0);
+  const totaalScore = totaalSample
+    ? metScore.reduce((s, c) => s + c.score * c.sampleSize, 0) / totaalSample
+    : null;
+  const totaalKlanten = new Set(
+    cats.flatMap((cat) => (agg[cat].existing.customers || []).map((k) => k.name).filter(Boolean))
+  ).size;
+
+  // Per categorie de drie sterkst gedragen thema's — dezelfde rangschikking
+  // (aantal unieke klanten) als de lijst over alle categorieën heen.
+  const perCategorieTop = (lijst) => {
+    const perCat = new Map();
+    for (const it of lijst) {
+      if (!perCat.has(it.cat)) perCat.set(it.cat, []);
+      perCat.get(it.cat).push(it);
+    }
+    return cats
+      .filter((cat) => perCat.has(cat))
+      .map((cat) => ({
+        cat,
+        label: CATEGORY_LABELS[cat],
+        items: perCat.get(cat).sort(byCountDesc).slice(0, 3),
+      }));
+  };
+
   return {
     perCategory,
-    topIssues: allIssues.slice(0, 8),
-    topWishes: allWishes.slice(0, 8),
-    topPositive: allPositive.slice(0, 8),
+    totaalScore,
+    totaalSample,
+    totaalKlanten,
+    topIssues: allIssues.slice(0, 3),
+    topWishes: allWishes.slice(0, 3),
+    topPositive: allPositive.slice(0, 3),
+    positiefPerCategorie: perCategorieTop(allPositive),
+    problemenPerCategorie: perCategorieTop(allIssues),
+    wensenPerCategorie: perCategorieTop(allWishes),
     topBarriers: allBarriers.slice(0, 8),
     topCompetitors,
     totalPotential,
@@ -2277,10 +2363,10 @@ function buildGlobalOverview(agg, aiCategories) {
 }
 
 function renderGlobalSection(overview) {
-  const scoreRows = overview.perCategory.map((c) => {
+  const scoreRow = (c, extraClass) => {
     if (c.score === null) {
       return `
-        <div class="score-row">
+        <div class="score-row${extraClass ? ' ' + extraClass : ''}">
           <span class="score-label">${escapeHtml(c.label)}</span>
           <div class="score-track"><div class="score-mid"></div></div>
           <span class="score-value">—</span>
@@ -2292,7 +2378,7 @@ function renderGlobalSection(overview) {
     const fillStyle = positive ? `left:50%;width:${pct}%;` : `left:${50 - pct}%;width:${pct}%;`;
     const lowSample = c.totalCustomers > 0 && c.sampleSize / c.totalCustomers < 0.3;
     return `
-      <div class="score-row">
+      <div class="score-row${extraClass ? ' ' + extraClass : ''}">
         <span class="score-label">${escapeHtml(c.label)}</span>
         <div class="score-track">
           <div class="score-mid"></div>
@@ -2301,7 +2387,18 @@ function renderGlobalSection(overview) {
         <span class="score-value ${positive ? 'pos' : 'neg'}">${positive ? '+' : ''}${Math.round(c.score * 100)}%</span>
         <span class="score-warn"${lowSample ? ' title="Gebaseerd op weinig klantopinies"' : ''}>${c.sampleSize}/${c.totalCustomers}</span>
       </div>`;
-  }).join('');
+  };
+
+  const scoreRows = overview.perCategory.map((c) => scoreRow(c)).join('');
+  const totaalRij = scoreRow(
+    {
+      label: 'Alle productgroepen',
+      score: overview.totaalScore,
+      sampleSize: overview.totaalSample,
+      totalCustomers: overview.totaalKlanten,
+    },
+    'score-total'
+  );
 
   const rankedList = (items, badgeClass, badgeText, emptyText) => {
     if (!items.length) return `<p class="narrative">${emptyText}</p>`;
@@ -2314,41 +2411,76 @@ function renderGlobalSection(overview) {
       </div>`).join('');
   };
 
+  // Per categorie de top 3, openklapbaar met klantnamen — dezelfde
+  // detailweergave als op de categorietabs, dus een klik opent het volledige
+  // bezoekrapport van die klant.
+  const perCategorieBlok = (groepen, badgeClass, badgeText, emptyText) => {
+    if (!groepen.length) return `<p class="narrative">${emptyText}</p>`;
+    return groepen.map((g) => `
+      <h3 class="part-subtitle">${escapeHtml(g.label)}</h3>
+      ${g.items.map((it) =>
+        renderDetailsBlock(it.text, it.klanten || [], `<span class="pill ${badgeClass}">${badgeText}</span>`, g.cat, 'existing')
+      ).join('')}`).join('');
+  };
+
   return `
     <div class="card">
       <h2 class="part-title">Globale barometer</h2>
-      <p class="part-sub">Score per categorie op basis van unieke klanten met een uitgesproken opinie (niet op aantal thema's) — zo trekt 1 spraakzame klant de score niet scheef. Het getal rechts (bv. "3/23") toont op hoeveel klanten de score effectief steunt.</p>
-      <p class="narrative" id="globalSummaryText">Samenvatting wordt gegenereerd...</p>
+      <p class="part-sub">Score per productcategorie, berekend op unieke bestaande klanten met een uitgesproken mening. Per klant telt het meest kritische signaal: negatief weegt zwaarder dan positief, positief zwaarder dan neutraal. Klanten zonder uitgesproken mening vallen weg. Het getal rechts (bv. "43/95") leest als: op 95 klanten met een opmerking in deze categorie hadden er 43 een uitgesproken mening.</p>
       <div class="score-list">${scoreRows}</div>
+      <div class="score-list score-total-wrap">${totaalRij}</div>
+      <p class="part-sub" style="margin-top:8px;">De totaalscore is een gewogen gemiddelde: elke categorie weegt mee naar het aantal klanten met een uitgesproken mening, zodat een categorie waarover maar enkelen iets zeiden het geheel niet scheeftrekt.</p>
     </div>
     <div class="card">
       <h2 class="part-title">Sterke punten</h2>
-      <p class="part-sub">Meest gedragen positieve signalen binnen Product &amp; Techniek / Levering &amp; Logistiek / Service &amp; Herstelling, over alle categorieën heen.</p>
+      <p class="part-sub">De drie breedst gedragen positieve signalen over alle categorieën heen, daarna per categorie de top drie. Gerangschikt op het aantal unieke klanten dat het onderwerp positief vermeldt. Klik een onderwerp open voor de klanten en hun bezoekrapport.</p>
       ${rankedList(overview.topPositive, 'positive', 'positief', 'Geen uitgesproken positieve signalen.')}
+      <h2 class="part-title" style="margin-top:18px;">Per productcategorie</h2>
+      ${perCategorieBlok(overview.positiefPerCategorie, 'positive', 'positief', 'Geen positieve signalen per categorie.')}
     </div>
     <div class="card">
       <h2 class="part-title">Werkpunten</h2>
-      <p class="part-sub">Product-, leverings- en servicesignalen met minstens één negatieve melding, en gewenste features — over alle categorieën heen, gesorteerd op aantal klanten. Dit is het R&amp;D/Product Management-relevante deel van de taxonomie.</p>
+      <p class="part-sub">Problemen en wensen uit Product &amp; Techniek, Levering &amp; Logistiek en Service &amp; Herstelling. Eerst de drie breedst gedragen over alle categorieën heen, daarna per categorie de top drie.</p>
+      <h3 class="part-subtitle">Grootste problemen</h3>
       ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische/logistieke/service-meldingen gerapporteerd.')}
+      <h3 class="part-subtitle">Meest gevraagde wensen</h3>
       ${rankedList(overview.topWishes, 'request', 'wens', 'Geen gewenste features gerapporteerd.')}
+      <h2 class="part-title" style="margin-top:18px;">Problemen per productcategorie</h2>
+      ${perCategorieBlok(overview.problemenPerCategorie, 'issue', 'probleem', 'Geen problemen per categorie.')}
+      <h2 class="part-title" style="margin-top:18px;">Wensen per productcategorie</h2>
+      ${perCategorieBlok(overview.wensenPerCategorie, 'request', 'wens', 'Geen wensen per categorie.')}
     </div>
     <div class="card">
       <h2 class="part-title">Concurrentiepositie</h2>
-      <p class="part-sub">Meest vermelde concurrenten bij prijsvergelijkingen door bestaande klanten (taxonomie-domein "Prijs &amp; Concurrentiepositie"), over alle categorieën heen — apart van de productsignalen hierboven.</p>
+      <p class="part-sub">Concurrenten die bestaande klanten bij naam noemen, met de productcategorieën waarin dat gebeurt — zo zie je meteen waar iemand wél en niet tegenover Winsol staat. Het getal is het aantal klanten dat de naam vermeldt.</p>
       ${overview.topCompetitors && overview.topCompetitors.length
         ? overview.topCompetitors.map((c) => `
           <div class="ranked-row">
             <span class="ranked-text">${escapeHtml(c.name)}</span>
+            <span class="ranked-cat">${escapeHtml((c.categorieen || []).join(' · ') || '—')}</span>
             <span class="count-badge">${c.count}</span>
           </div>`).join('')
-        : '<p class="narrative">Geen concurrenten expliciet vermeld bij prijsvergelijkingen.</p>'}
+        : '<p class="narrative">Geen concurrenten bij naam vermeld.</p>'}
     </div>
     <div class="card">
-      <h2 class="part-title">Prospecting — totaal</h2>
+      <h2 class="part-title">Prospecting</h2>
       <div class="stat-row">
         <div class="stat"><b>${overview.totalProspects}</b><span>prospects (alle categorieën)</span></div>
         <div class="stat"><b>&euro;${Math.round(overview.totalPotential).toLocaleString('nl-BE')}</b><span>totaal potentieel (schatting)</span></div>
       </div>
+      <h2 class="part-title" style="margin-top:16px;">Per productcategorie</h2>
+      <p class="part-sub">Dezelfde cijfers als op de categorietabs — ze komen uit dezelfde records. Klik open voor de prospects zelf.</p>
+      ${overview.perCategory.filter((c) => c.prospects).length
+        ? overview.perCategory.filter((c) => c.prospects).map((c) =>
+            renderDetailsBlock(
+              c.label,
+              c.prospectNamen || [],
+              `<span class="pill neutral">&euro;${Math.round(c.potentialSum).toLocaleString('nl-BE')}</span>`,
+              c.cat,
+              'prospecting'
+            )
+          ).join('')
+        : '<p class="narrative">Geen prospects in deze selectie.</p>'}
       <h2 class="part-title" style="margin-top:16px;">Grootste drempels</h2>
       ${rankedList(overview.topBarriers, 'neutral', 'drempel', 'Geen drempels gerapporteerd.')}
     </div>
@@ -2359,46 +2491,6 @@ function renderGlobalSection(overview) {
 // barometer — krijgt enkel de al samengevatte cijfers/labels (geen ruwe
 // remarks), en laadt onafhankelijk van de rest zodat de 7 categorie-tabs
 // er niet op moeten wachten.
-async function loadGlobalSummary(overview) {
-  const el = document.getElementById('globalSummaryText');
-  if (!el) return;
-  el.classList.add('loading');
-  const categories = overview.perCategory
-    .filter((c) => c.score !== null || c.totalCustomers > 0)
-    .map((c) => ({
-      label: c.label,
-      scoreLabel: c.score === null ? 'onvoldoende data' : `${c.score >= 0 ? '+' : ''}${Math.round(c.score * 100)}%`,
-      sampleSize: c.sampleSize,
-      totalCustomers: c.totalCustomers,
-      topPositive: overview.topPositive.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
-      topIssues: overview.topIssues.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
-      topWishes: overview.topWishes.filter((p) => p.cat === c.cat).map((p) => ({ label: p.text, count: p.count })),
-    }));
-
-  try {
-    const res = await fetch(ANALYZE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mode: 'global_summary', categories }),
-    });
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const errBody = await res.json();
-        detail = errBody.error || '';
-      } catch {
-        // geen JSON-body — geen detail beschikbaar
-      }
-      throw new Error(`status ${res.status}${detail ? ' — ' + detail : ''}`);
-    }
-    const data = await res.json();
-    el.textContent = data.summary || 'Geen samenvatting beschikbaar.';
-  } catch (err) {
-    el.textContent = 'Samenvatting kon niet geladen worden (' + err.message + ').';
-  } finally {
-    el.classList.remove('loading');
-  }
-}
 
 // Eén klikbare klantnaam — opent de brondata-popup (openCustomerModal) via
 // het gedelegeerde click-event hieronder. data-cat/data-part/data-name

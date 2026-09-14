@@ -1182,29 +1182,75 @@ async function handleCachedResults(body, env) {
   // Bezoeken tellen uit de aparte "visit:"-registratie: die bestaat voor élk
   // bezoekrapport, ook als er geen bruikbare opmerking in stond. Enkel
   // metadata, dus dit kost alleen list()-calls.
-  let visitCursor;
   let visitCount = 0;
-  if (!body.cursor) do {
-    const vPage = await env.FEEDBACKLOOP_KV.list({ prefix: 'visit:', cursor: visitCursor });
-    for (const k of vPage.keys) {
-      const m = k.metadata || {};
-      if (regioFilter && m.regio !== regioFilter) continue;
-      if (repFilter && m.rep !== repFilter) continue;
-      if (klantFilter && m.klant !== klantFilter) continue;
-      if (!inPeriode(m.date || '')) continue;
-      const maand = String(m.date || '').slice(0, 7);
-      if (!maand) continue;
-      if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
-      perMaand[maand][m.kind === 'prospect' ? 'prospect' : 'klant']++;
-      visitCount++;
-    }
-    visitCursor = vPage.list_complete ? undefined : vPage.cursor;
-  } while (visitCursor);
+  let visitsGeschat = false;
+  if (!body.cursor) {
+    const bestandenMetRegistratie = new Set();
+    let visitCursor;
+    do {
+      const vPage = await env.FEEDBACKLOOP_KV.list({ prefix: 'visit:', cursor: visitCursor });
+      for (const k of vPage.keys) {
+        const m = k.metadata || {};
+        if (m.sourceFile) bestandenMetRegistratie.add(m.sourceFile);
+        if (regioFilter && m.regio !== regioFilter) continue;
+        if (repFilter && m.rep !== repFilter) continue;
+        if (klantFilter && m.klant !== klantFilter) continue;
+        if (!inPeriode(m.date || '')) continue;
+        const maand = String(m.date || '').slice(0, 7);
+        if (!maand) continue;
+        if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
+        perMaand[maand][m.kind === 'prospect' ? 'prospect' : 'klant']++;
+        visitCount++;
+      }
+      visitCursor = vPage.list_complete ? undefined : vPage.cursor;
+    } while (visitCursor);
+
+    // Bestanden die geanalyseerd zijn vóór de bezoekregistratie bestond, hebben
+    // geen "visit:"-records. Die mogen niet gewoon uit de grafiek verdwijnen —
+    // een user kan niets heropladen om dat te herstellen. We leiden ze daarom
+    // af uit de "remark:"-sleutels, en wel uitsluitend uit hun metadata: geen
+    // enkele KV.get(), dus dit blijft goedkoop. Eén bezoek levert meerdere
+    // opmerking-records op (één per categorie), vandaar de ontdubbeling op
+    // bestand + opmerkinghash.
+    //
+    // Twee beperkingen, bewust aanvaard: bezoeken zonder bruikbare
+    // opmerkingtekst hebben helemaal geen record en ontbreken dus, en records
+    // van vóór dateIso dragen geen datum in hun metadata — daarvoor nemen we de
+    // maand uit de bestandsnaam. Zodra een admin het bestand één keer opnieuw
+    // oplaadt, vervangt de exacte registratie deze schatting.
+    const gezien = new Set();
+    let remarkCursor;
+    do {
+      const rPage = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor: remarkCursor });
+      for (const k of rPage.keys) {
+        const m = k.metadata || {};
+        const delen = k.name.split(':');
+        const src = m.sourceFile || delen[1] || '';
+        if (!src || bestandenMetRegistratie.has(src)) continue;
+        if (regioFilter && m.regio !== regioFilter) continue;
+        if (repFilter && m.rep !== repFilter) continue;
+        if (klantFilter && m.klant !== klantFilter) continue;
+        const uitBestandsnaam = src.match(/_(\d{2})-(\d{4})\./);
+        const iso = m.date || (uitBestandsnaam ? `${uitBestandsnaam[2]}-${uitBestandsnaam[1]}-01` : '');
+        if (!iso || !inPeriode(iso)) continue;
+        const bezoekId = `${src}|${delen[3] || ''}`;
+        if (gezien.has(bezoekId)) continue;
+        gezien.add(bezoekId);
+        const maand = iso.slice(0, 7);
+        if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
+        perMaand[maand][m.kind === 'prospect' ? 'prospect' : 'klant']++;
+        visitCount++;
+        visitsGeschat = true;
+      }
+      remarkCursor = rPage.list_complete ? undefined : rPage.cursor;
+    } while (remarkCursor);
+  }
 
   return jsonResponse({
     categories,
     perMaand,
     visitCount,
+    visitsGeschat,
     total,
     matched: kept,
     nextCursor,

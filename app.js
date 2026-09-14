@@ -884,7 +884,7 @@ async function loadUserView() {
 // onvolledige cijfers als gevolg.
 const MAX_CACHE_PAGES = 40;
 async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgress) {
-  const data = { categories: {}, perMaand: {}, visitCount: 0, total: 0, matched: 0 };
+  const data = { categories: {}, perMaand: {}, visitCount: 0, visitsGeschat: false, total: 0, matched: 0 };
   let cursor = null;
   let paginas = 0;
   do {
@@ -922,6 +922,7 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgres
     // aparte, goedkope telling op metadata).
     if (d.perMaand && Object.keys(d.perMaand).length) data.perMaand = d.perMaand;
     if (d.visitCount) data.visitCount = d.visitCount;
+    if (d.visitsGeschat) data.visitsGeschat = true;
     data.total += d.total || 0;
     data.matched += d.matched || 0;
     cursor = d.nextCursor || null;
@@ -954,7 +955,7 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgres
   lastAgg = agg;
   const globalOverview = buildGlobalOverview(agg, aiCategories);
   renderResults(agg, aiCategories, globalOverview);
-  renderVisitsChart(data.perMaand);
+  renderVisitsChart(data.perMaand, data.visitsGeschat);
   const summaryEl = document.getElementById('globalSummaryText');
   if (summaryEl) {
     summaryEl.classList.remove('loading');
@@ -1865,7 +1866,7 @@ document.getElementById('analyzeBtn').addEventListener('click', async () => {
 // handleCachedResults (die telt ze toch al bij het doorlopen van de records),
 // dus dit kost geen extra KV-reads en zeker geen AI-aanroep.
 const MAAND_NAMEN = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
-function renderVisitsChart(perMaand) {
+function renderVisitsChart(perMaand, geschat) {
   const card = document.getElementById('visitsCard');
   const host = document.getElementById('visitsChart');
   if (!card || !host) return;
@@ -1876,11 +1877,7 @@ function renderVisitsChart(perMaand) {
     // nog geen. Eén keer heropladen volstaat en kost geen AI (alle opmerkingen
     // staan al in de cache).
     host.className = 'visits';
-    host.innerHTML =
-      '<p class="visits-empty">Nog geen bezoekregistratie voor deze selectie. ' +
-      'Bezoeken worden bijgehouden vanaf het moment dat een bestand opgeladen wordt — ' +
-      'laad je maandbestanden één keer opnieuw op (dat kost geen AI-aanroep, want de ' +
-      'opmerkingen staan al in de cache) en de grafiek vult zich vanzelf.</p>';
+    host.innerHTML = '<p class="visits-empty">Geen bezoeken gevonden voor deze selectie.</p>';
     card.hidden = false;
     return;
   }
@@ -1917,7 +1914,8 @@ function renderVisitsChart(perMaand) {
       <span><i class="visits-swatch" style="background:var(--prospect)"></i>Prospect (${totProspect})</span>
     </div>
     <div class="visits-plot">${kolommen}</div>
-    <div class="visits-labels">${labels}</div>`;
+    <div class="visits-labels">${labels}</div>
+    ${geschat ? '<p class="visits-empty">Voor bestanden die geanalyseerd zijn vóór de bezoekregistratie bestond, zijn deze aantallen afgeleid uit de gecachete opmerkingen. Bezoeken zonder bruikbare opmerking ontbreken daar, dus die maanden kunnen iets te laag staan; ze worden exact zodra een admin het bestand één keer opnieuw oplaadt.</p>' : ''}`;
   card.hidden = false;
 }
 

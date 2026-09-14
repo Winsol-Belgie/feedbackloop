@@ -1046,6 +1046,7 @@ filterBtn.addEventListener('click', async () => {
     }
   }
   let cachedKeys = new Set();
+  let onvolledigHersteld = 0;
   if (sourceFiles.length) {
     setStatus('Cache nakijken...');
     const { ok, status, data } = await authRequest({ mode: 'cache_sync', files: sourceFiles, keys: candidateKeys });
@@ -1060,6 +1061,7 @@ filterBtn.addEventListener('click', async () => {
       return;
     }
     cachedKeys = new Set((data && data.existing) || []);
+    onvolledigHersteld = (data && data.incomplete) || 0;
   }
   const hergebruikt = cachedKeys.size;
   const nieuw = candidateKeys.length - hergebruikt;
@@ -1210,6 +1212,7 @@ filterBtn.addEventListener('click', async () => {
     : '';
   const bijwerkDelen = [];
   if (bezoekenGeregistreerd) bijwerkDelen.push(`${bezoekenGeregistreerd} bezoek(en) geregistreerd`);
+  if (onvolledigHersteld) bijwerkDelen.push(`${onvolledigHersteld} eerder onvolledig gebleven opmerking(en) opnieuw aangeboden`);
   if (verrijkt) bijwerkDelen.push(`${verrijkt} record(s) aangevuld met een €-waarde`);
   const bijwerkNote = bijwerkDelen.length ? ` Zonder AI-kost: ${bijwerkDelen.join(' en ')}.` : '';
   let usageNote = '';

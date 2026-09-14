@@ -1008,7 +1008,25 @@ async function handleCacheSync(body, env) {
   const settled = await Promise.allSettled(stale.map((name) => env.FEEDBACKLOOP_KV.delete(name)));
   const deleted = settled.filter((s) => s.status === 'fulfilled').length;
 
-  return jsonResponse({ existing, deleted });
+  // Records die er wél zijn maar zónder classificatie (de AI sloeg dat id over)
+  // mogen niet als "al gedaan" gelden: anders slaat de kostenrem ze voorgoed
+  // over en gaat dat gat nooit meer dicht. Zulke records zijn alleen te
+  // herkennen door ze te lezen, dus dat doen we hier één keer per upload, en
+  // begrensd — Cloudflare laat ~1000 KV-bewerkingen per aanvraag toe en de
+  // deletes hierboven tellen mee. Boven die grens houden we het bij het oude
+  // gedrag i.p.v. de aanvraag te laten mislukken.
+  const TE_CONTROLEREN = Math.max(0, 900 - stale.length);
+  const controleren = existing.slice(0, TE_CONTROLEREN);
+  const gelezen = await Promise.all(controleren.map((n) => env.FEEDBACKLOOP_KV.get(n, 'json')));
+  const onvolledig = new Set();
+  gelezen.forEach((rec, i) => {
+    if (!rec) return onvolledig.add(controleren[i]);
+    const leeg = rec.kind === 'prospect' ? !rec.interest : !rec.sentiment;
+    if (leeg) onvolledig.add(controleren[i]);
+  });
+  const volledig = existing.filter((n) => !onvolledig.has(n));
+
+  return jsonResponse({ existing: volledig, deleted, incomplete: onvolledig.size });
 }
 
 async function deleteByPrefix(kv, prefix) {

@@ -954,13 +954,32 @@ filterBtn.addEventListener('click', async () => {
   setAnalyzeStatus('');
   setStatus('Cache voorbereiden...');
 
-  // Vóór de analyse van start gaat, worden bestaande cache-entries van de
-  // betrokken bronbestanden gewist — zo vervangt een heropload met
-  // dezelfde bestandsnaam (bv. na een correctie) netjes de oude
-  // classificatie i.p.v. ernaast te blijven bestaan.
+  const agg = buildAggregation(parsedRows);
+  lastAgg = agg;
+  cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
+  aiResponseIssues = {};
+  aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
+
+  const cats = Object.keys(CATEGORY_LABELS);
+
+  // Kostenrem: een opmerking die al geanalyseerd is, hoeft niet opnieuw naar de
+  // AI. De cachesleutel is een hash van klant + datum + opmerking, dus
+  // ongewijzigde tekst geeft gegarandeerd dezelfde sleutel; wijzigt de tekst,
+  // dan verandert de hash mee en wordt ze vanzelf opnieuw geanalyseerd.
+  // Vroeger wiste elke "Opladen" eerst alles van de betrokken bestanden en
+  // betaalde je dus telkens de volle heranalyse — drie keer hetzelfde bestand
+  // opladen kostte drie keer de volle prijs.
   const sourceFiles = [...new Set(parsedRows.map((r) => r['sourceFile']).filter(Boolean))];
+  const candidateKeys = [];
+  for (const cat of cats) {
+    for (const r of remarksForAi(agg[cat].existing.customers, cat)) {
+      if (r.key && r.sourceFile) candidateKeys.push(`remark:${r.sourceFile}:${cat}:${r.key}`);
+    }
+  }
+  let cachedKeys = new Set();
   if (sourceFiles.length) {
-    const { ok, status, data } = await authRequest({ mode: 'cache_invalidate_files', files: sourceFiles });
+    setStatus('Cache nakijken...');
+    const { ok, status, data } = await authRequest({ mode: 'cache_sync', files: sourceFiles, keys: candidateKeys });
     if (status === 401 || status === 403) {
       showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
       filterBtn.disabled = false;
@@ -971,15 +990,10 @@ filterBtn.addEventListener('click', async () => {
       filterBtn.disabled = false;
       return;
     }
+    cachedKeys = new Set((data && data.existing) || []);
   }
-
-  const agg = buildAggregation(parsedRows);
-  lastAgg = agg;
-  cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
-  aiResponseIssues = {};
-  aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
-
-  const cats = Object.keys(CATEGORY_LABELS);
+  const hergebruikt = cachedKeys.size;
+  const nieuw = candidateKeys.length - hergebruikt;
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
   // de analyse start, anders update showProgress() een balk die nog
@@ -994,7 +1008,7 @@ filterBtn.addEventListener('click', async () => {
   const results = await Promise.all(cats.map(async (cat) => {
     const v = agg[cat];
     try {
-      const analysis = await analyzeCategory(cat, v);
+      const analysis = await analyzeCategory(cat, v, cachedKeys);
       return [cat, analysis, null];
     } catch (err) {
       return [cat, null, err.message];
@@ -1008,7 +1022,9 @@ filterBtn.addEventListener('click', async () => {
   const failed = [];
   for (const [cat, analysis, err] of results) {
     if (analysis) aiCategories[cat] = analysis;
-    else failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
+    else if (err) failed.push(`${CATEGORY_LABELS[cat]} (${err})`);
+    // analysis === null zonder fout = niets nieuws te analyseren voor deze
+    // categorie; de cijfers komen dan volledig uit de cache.
   }
 
   // Regio/rep/klant-filters opbouwen uit de volledige (ongefilterde)
@@ -1024,8 +1040,21 @@ filterBtn.addEventListener('click', async () => {
   setCollapsed(filterBody, filterToggle, filterSummary, false);
   updateFilterStatus();
 
+  // Categorieën die volledig uit de cache kwamen hebben deze run geen
+  // AI-resultaat, dus renderResults() zou ze leeg tonen terwijl de data wél
+  // bestaat. Zodra er iets hergebruikt is, tonen we daarom het volledige beeld
+  // uit de cache (zoals "Filteren" doet) i.p.v. enkel wat nu vers is.
+  const uitCache = hergebruikt > 0;
   const globalOverview = buildGlobalOverview(agg, aiCategories);
-  renderResults(agg, aiCategories, globalOverview);
+  if (uitCache) {
+    try {
+      await renderCachedFilter('', '', '');
+    } catch (err) {
+      if (err.message !== '__handled__') renderResults(agg, aiCategories, globalOverview);
+    }
+  } else {
+    renderResults(agg, aiCategories, globalOverview);
+  }
   hideProgress();
 
   // Cache-schrijffouten mogen de analyse zelf niet blokkeren (zie
@@ -1038,7 +1067,7 @@ filterBtn.addEventListener('click', async () => {
         (cacheWriteStats.firstError ? ` (${cacheWriteStats.firstError})` : '') +
         ' — "Filteren" zal daardoor onvolledig zijn tot een nieuwe "Opladen".';
     }
-  } else {
+  } else if (!hergebruikt) {
     cacheNote = ' Let op: er werd niets in de cache weggeschreven — "Filteren" zal leeg blijven tot een nieuwe "Opladen".';
   }
   // Diagnose (i.o.v. Gwenn): laat zien of de AI voor een categorie geen
@@ -1058,6 +1087,11 @@ filterBtn.addEventListener('click', async () => {
   const aiNote = aiNotes.length ? ` Let op — onvolledig AI-antwoord voor: ${aiNotes.join('; ')}.` : '';
   // AI-verbruik + accountlimiet tonen: zo is meteen zichtbaar of een trage run
   // aan de hoeveelheid werk lag of aan de rate limit van het Anthropic-account.
+  const hergebruikNote = hergebruikt
+    ? ` ${hergebruikt} opmerking(en) stonden al in de cache en kostten niets; ${nieuw} nieuw geanalyseerd.` +
+      ' De weergave hieronder komt daarom volledig uit de cache — dus zonder de verhalende AI-samenvattingen,' +
+      ' die enkel bij een volledig verse analyse verschijnen.'
+    : '';
   let usageNote = '';
   if (aiUsageStats.calls) {
     const duurSec = aiUsageStats.startedAt ? Math.round((Date.now() - aiUsageStats.startedAt) / 1000) : 0;
@@ -1079,14 +1113,14 @@ filterBtn.addEventListener('click', async () => {
     usageNote += ` — ± $${kosten.toFixed(2)}.`;
   }
   if (failed.length) {
-    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${usageNote}`, true);
+    setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${hergebruikNote}${usageNote}`, true);
   } else {
-    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}${usageNote}`, !!cacheNote || !!aiNote);
+    setStatus(`Analyse voltooid op basis van ${parsedRows.length} rijen. Gebruik hieronder de filters en klik op "Filteren" om de weergave te verfijnen — dat kost geen nieuwe AI-aanroep.${cacheNote}${aiNote}${hergebruikNote}${usageNote}`, !!cacheNote || !!aiNote);
   }
   filterBtn.disabled = false;
   // Analyse is klaar — de upload-kaart mag nu plaats maken.
   setCollapsed(uploadBody, uploadToggle, uploadSummary, true, uploadSummaryText());
-  if (Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
+  if (!uitCache && Object.keys(aiCategories).length) loadGlobalSummary(globalOverview);
   loadCacheStats();
 });
 
@@ -1621,9 +1655,17 @@ async function analyzeChunkWithSplit(cat, existingChunk, prospectingChunk, poten
 // resultaten worden nadien samengevoegd tot één analyse voor de hele
 // categorie. Als één batch faalt maar minstens één andere lukt, gaat de
 // analyse door op basis van wat wel gelukt is (met een console.warn).
-async function analyzeCategory(cat, v) {
-  const existingAll = remarksForAi(v.existing.customers, cat);
+async function analyzeCategory(cat, v, cachedKeys) {
+  const alreadyCached = cachedKeys || new Set();
+  // Opmerkingen die al in de cache zitten worden niet opnieuw opgestuurd: hun
+  // classificatie verandert niet en staat al klaar voor "Filteren".
+  const existingAll = remarksForAi(v.existing.customers, cat).filter(
+    (r) => !alreadyCached.has(`remark:${r.sourceFile}:${cat}:${r.key}`)
+  );
   const prospectingAll = remarksForAi(v.prospecting.customers, cat);
+  // Niets nieuws én geen prospects: dan valt er voor deze categorie niets te
+  // vragen aan de AI. Scheelt een volledige (betalende) aanroep.
+  if (!existingAll.length && !prospectingAll.length) return null;
   const existingChunks = chunkArray(existingAll, BATCH_SIZE);
   const prospectingChunks = chunkArray(prospectingAll, BATCH_SIZE);
   const batchCount = Math.max(existingChunks.length, prospectingChunks.length);

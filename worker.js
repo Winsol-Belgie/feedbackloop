@@ -325,6 +325,9 @@ export default {
     if (body.mode === 'cache_invalidate_files') {
       return handleCacheInvalidateFiles(body, env);
     }
+    if (body.mode === 'cache_sync') {
+      return handleCacheSync(body, env);
+    }
     if (body.mode === 'cache_reset') {
       return handleCacheReset(env);
     }
@@ -836,6 +839,45 @@ async function handleAdminUpsertUsers(body, env) {
 // aanroep terug, met een cursor voor de rest) en verwijdert ze. Gebruikt
 // door zowel de per-bestand invalidatie (Fase 4) als de volledige
 // cache-reset hieronder — enkel het verschil in prefix.
+// Vergelijkt wat er voor de opgeladen bestanden al in de cache zit met wat deze
+// upload nodig heeft, en doet twee dingen in één keer:
+//
+//   1. Sleutels van deze bestanden die NIET meer voorkomen in de nieuwe upload
+//      worden verwijderd (een gecorrigeerde opmerking krijgt een andere hash,
+//      dus de oude versie moet weg — anders blijft ze als spook in "Filteren"
+//      staan).
+//   2. Sleutels die al bestaan én nog nodig zijn, worden teruggegeven zodat de
+//      client die opmerkingen NIET opnieuw naar de AI stuurt.
+//
+// Dit vervangt het oude cache_invalidate_files, dat bij elke "Opladen" alles
+// van die bestanden wiste en dus een volledige (betalende) heranalyse afdwong —
+// drie keer hetzelfde bestand opladen kostte drie keer de volle prijs.
+async function handleCacheSync(body, env) {
+  const files = Array.isArray(body.files) ? body.files.filter(Boolean) : [];
+  const needed = new Set(Array.isArray(body.keys) ? body.keys.filter(Boolean) : []);
+  if (!files.length) return jsonResponse({ existing: [], deleted: 0 });
+
+  const fileSet = new Set(files);
+  const existing = [];
+  const stale = [];
+  let cursor;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    for (const k of page.keys) {
+      const src = (k.metadata || {}).sourceFile;
+      if (!fileSet.has(src)) continue; // andere bestanden blijven ongemoeid
+      if (needed.has(k.name)) existing.push(k.name);
+      else stale.push(k.name);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  const settled = await Promise.allSettled(stale.map((name) => env.FEEDBACKLOOP_KV.delete(name)));
+  const deleted = settled.filter((s) => s.status === 'fulfilled').length;
+
+  return jsonResponse({ existing, deleted });
+}
+
 async function deleteByPrefix(kv, prefix) {
   let cursor;
   let deleted = 0;

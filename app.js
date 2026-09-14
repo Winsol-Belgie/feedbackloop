@@ -901,7 +901,7 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo) {
     const pros = c.prospects || { customers: [], signals: [] };
     agg[cat] = {
       existing: { customers: c.customers },
-      prospecting: { customers: pros.customers, potentialSum: 0, signals: pros.signals },
+      prospecting: { customers: pros.customers, potentialSum: pros.potentialSum || 0, signals: pros.signals },
     };
     aiCategories[cat] = {
       existing_customers: {
@@ -952,8 +952,25 @@ async function applyCachedFilter(regio, rep, klant, btnEl, statusEl, dateFrom, d
   }
 }
 
+const userFilterVan = document.getElementById('userFilterVan');
+const userFilterTot = document.getElementById('userFilterTot');
 userViewBtn.addEventListener('click', () => {
-  applyCachedFilter(userFilterRegio.value, userFilterRep.value, userFilterKlant.value.trim(), userViewBtn, userViewStatus);
+  const van = userFilterVan.value;
+  const tot = userFilterTot.value;
+  if (van && tot && van > tot) {
+    userViewStatus.textContent = '"Vanaf" ligt na "tot en met" — draai de datums om.';
+    userViewStatus.className = 'status err';
+    return;
+  }
+  applyCachedFilter(
+    userFilterRegio.value,
+    userFilterRep.value,
+    userFilterKlant.value.trim(),
+    userViewBtn,
+    userViewStatus,
+    van,
+    tot
+  );
 });
 
 // "Opladen": verwerkt en analyseert ALLE ingelezen rijen (parsedRows,
@@ -1012,6 +1029,30 @@ filterBtn.addEventListener('click', async () => {
   }
   const hergebruikt = cachedKeys.size;
   const nieuw = candidateKeys.length - hergebruikt;
+
+  // Elk bezoekrapport apart registreren, los van de AI-analyse. De
+  // "remark:"-records bestaan enkel voor opmerkingen met bruikbare tekst per
+  // categorie, dus bezoeken met een lege of administratieve notitie zaten
+  // nergens — waardoor de grafiek er structureel te weinig toonde (gemeten op
+  // juni 2026: 156 in beeld tegenover 211 in de Excel). Geen AI-kost.
+  const visits = parsedRows
+    .filter((r) => r['sourceFile'])
+    .map((r) => ({
+      // Zelfde sleutelopbouw als in buildAggregation (Remark + Re samengevoegd),
+      // zodat een bezoek en zijn opmerking-records dezelfde identiteit delen.
+      key: remarkCacheKey(r['name'], r['date'], [r['remark'], r['re']].filter(Boolean).join(' — ')),
+      sourceFile: r['sourceFile'],
+      klant: r['name'] || '',
+      rep: r['rep'] || '',
+      regio: r['regio'] || '',
+      dateIso: toIsoDate(r['date'], r['sourceFile']),
+      kind: isExisting(r) ? 'existing' : 'prospect',
+    }));
+  if (visits.length) {
+    // Mislukt dit, dan blijft de analyse gewoon doorgaan: enkel de grafiek is
+    // dan onvolledig.
+    await authRequest({ mode: 'store_visits', visits });
+  }
   // De voortgangsbalk en "X/Y categorieën verwerkt"-tekst zitten in
   // filterCard (Stap 2) — die kaart moet dus al zichtbaar zijn VOORDAT
   // de analyse start, anders update showProgress() een balk die nog
@@ -1473,8 +1514,14 @@ function buildAggregation(rows) {
       if (existing) {
         agg[cat].existing.customers.push(detail);
       } else {
-        agg[cat].prospecting.customers.push(detail);
-        agg[cat].prospecting.potentialSum += potentialForCategory(row, cat);
+        // Het potentieel hangt aan de rij, maar wordt per categorie bepaald
+        // (productspecifieke kolom met terugval op de algemene "Potential").
+        // We hangen het aan de opmerking zelf, zodat de Worker het kan
+        // bewaren en de weergave uit de cache het opnieuw kan optellen —
+        // anders toont "Filteren" overal EUR 0.
+        const p = potentialForCategory(row, cat);
+        agg[cat].prospecting.customers.push({ ...detail, potential: p });
+        agg[cat].prospecting.potentialSum += p;
       }
     }
   }
@@ -1539,6 +1586,7 @@ function remarksForAi(customers, targetCat) {
       type: c.type,
       status: c.status,
       dateIso: c.dateIso || '',
+      potential: c.potential || 0,
     }))
     .filter((c) => c.remark);
 }

@@ -232,7 +232,7 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 
   <div class="card" id="userViewCard" hidden>
     <h2 class="part-title"><span class="step-label">Stap 1</span>Filter</h2>
-    <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant. De resultaten komen uit de cache van de laatste analyses per opmerking — er gebeurt geen nieuwe AI-analyse. Verhalende samenvattingen en prospecting-cijfers zijn enkel beschikbaar na een nieuwe analyse door een admin.</p>
+    <p class="part-sub">Optioneel: kies een regio, sales rep en/of klant. De resultaten komen uit de cache van de laatste analyses per opmerking — er gebeurt geen nieuwe AI-analyse. Verhalende samenvattingen zijn enkel beschikbaar na een nieuwe analyse door een admin; de cijfers, thema's en prospect-classificatie komen uit de cache.</p>
     <div class="filter-row">
       <label class="filter-field">
         <span>Regio</span>
@@ -246,6 +246,14 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
         <span>Klant</span>
         <input id="userFilterKlant" list="userFilterKlantList" placeholder="Alle" autocomplete="off">
         <datalist id="userFilterKlantList"></datalist>
+      </label>
+      <label class="filter-field">
+        <span>Vanaf (datum)</span>
+        <input id="userFilterVan" type="date">
+      </label>
+      <label class="filter-field">
+        <span>Tot en met (datum)</span>
+        <input id="userFilterTot" type="date">
       </label>
     </div>
     <div class="row">
@@ -370,6 +378,6 @@ button.customer-link:hover,button.customer-link:focus-visible{color:var(--ink);t
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609141100"></script>
+<script src="app.js?v=202609141200"></script>
 </body>
 </html>

@@ -355,6 +355,9 @@ export default {
     if (body.mode === 'cache_sync') {
       return handleCacheSync(body, env);
     }
+    if (body.mode === 'store_visits') {
+      return handleStoreVisits(body, env);
+    }
     if (body.mode === 'cache_reset') {
       return handleCacheReset(env);
     }
@@ -566,6 +569,7 @@ export default {
           type: r.type || '',
           status: r.status || '',
           remark: r.remark || '',
+          potential: Number(r.potential) || 0,
           interest: sig ? sig.interest : null,
           barrier: sig ? sig.barrier : null,
           detail: sig ? sig.detail || '' : '',
@@ -911,6 +915,38 @@ async function handleAdminUpsertUsers(body, env) {
 // aanroep terug, met een cursor voor de rest) en verwijdert ze. Gebruikt
 // door zowel de per-bestand invalidatie (Fase 4) als de volledige
 // cache-reset hieronder — enkel het verschil in prefix.
+// Registreert elk bezoekrapport apart, los van de AI-analyse. Nodig omdat de
+// "remark:"-records alleen bestaan voor opmerkingen die bruikbare tekst voor
+// een categorie bevatten: een bezoek met een lege of louter administratieve
+// notitie levert geen enkel record op, en viel dus uit de telling. Gemeten op
+// history_BE_06-2026.xls: 211 bezoeken in de Excel (55 klant, 156 prospect),
+// maar de grafiek toonde er 156 — precies de bezoeken met geanalyseerde tekst.
+//
+// Alles staat in de metadata, zodat tellen enkel een KV.list() kost en geen
+// enkele KV.get(). Er komt ook geen AI aan te pas.
+async function handleStoreVisits(body, env) {
+  const visits = Array.isArray(body.visits) ? body.visits : [];
+  if (!visits.length) return jsonResponse({ stored: 0 });
+  const writes = visits
+    .filter((v) => v && v.key && v.sourceFile)
+    .map((v) =>
+      env.FEEDBACKLOOP_KV.put(`visit:${v.sourceFile}:${v.key}`, '1', {
+        metadata: {
+          sourceFile: v.sourceFile,
+          klant: v.klant || '',
+          rep: v.rep || '',
+          regio: v.regio || '',
+          date: v.dateIso || '',
+          kind: v.kind === 'prospect' ? 'prospect' : 'existing',
+        },
+      })
+    );
+  const settled = await Promise.allSettled(writes);
+  const stored = settled.filter((s) => s.status === 'fulfilled').length;
+  const failed = settled.length - stored;
+  return jsonResponse({ stored, failed });
+}
+
 // Vergelijkt wat er voor de opgeladen bestanden al in de cache zit met wat deze
 // upload nodig heeft, en doet twee dingen in één keer:
 //
@@ -1114,18 +1150,12 @@ async function handleCachedResults(body, env) {
       customers: [],
       topic_tags: [],
       customer_sentiments: [],
-      prospects: { customers: [], signals: [] },
+      prospects: { customers: [], signals: [], potentialSum: 0 },
     };
   }
   // Bezoeken per maand, opgesplitst klant/prospect — voedt de grafiek in de
   // client. Kost niets extra: we lopen de records hier toch al door.
-  // Eén bezoekrapport kan over meerdere categorieën gaan en wordt dan als
-  // meerdere records bewaard. Voor "bezoeken per maand" tellen we daarom
-  // unieke rapporten (de sleutel is een hash van klant + datum + opmerking),
-  // anders telt een rapport over drie categorieën drie keer mee — vandaar
-  // eerder 234 "bezoeken" op 211 rijen.
   const perMaand = {};
-  const gezien = new Set();
   let kept = 0;
   for (const rec of records) {
     if (!rec || !categories[rec.category]) continue;
@@ -1134,16 +1164,11 @@ async function handleCachedResults(body, env) {
     kept++;
     const bucket = categories[rec.category];
     const isProspect = rec.kind === 'prospect';
-    const maand = recIso.slice(0, 7); // JJJJ-MM
-    const bezoekId = `${rec.sourceFile}|${rec.key}`;
-    if (maand && !gezien.has(bezoekId)) {
-      gezien.add(bezoekId);
-      if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
-      perMaand[maand][isProspect ? 'prospect' : 'klant']++;
-    }
+
     if (isProspect) {
       bucket.prospects.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
       bucket.prospects.signals.push({ customer: rec.klant, interest: rec.interest, barrier: rec.barrier, detail: rec.detail || '' });
+      bucket.prospects.potentialSum += Number(rec.potential) || 0;
       continue;
     }
     bucket.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
@@ -1152,6 +1177,26 @@ async function handleCachedResults(body, env) {
       bucket.topic_tags.push({ customer: rec.klant, domain: t.domain, topic: t.topic, sentiment: t.sentiment, detail: t.detail, competitor: t.competitor || '' });
     }
   }
+
+  // Bezoeken tellen uit de aparte "visit:"-registratie: die bestaat voor élk
+  // bezoekrapport, ook als er geen bruikbare opmerking in stond. Enkel
+  // metadata, dus dit kost alleen list()-calls.
+  let visitCursor;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'visit:', cursor: visitCursor });
+    for (const k of page.keys) {
+      const m = k.metadata || {};
+      if (regioFilter && m.regio !== regioFilter) continue;
+      if (repFilter && m.rep !== repFilter) continue;
+      if (klantFilter && m.klant !== klantFilter) continue;
+      if (!inPeriode(m.date || '')) continue;
+      const maand = String(m.date || '').slice(0, 7);
+      if (!maand) continue;
+      if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
+      perMaand[maand][m.kind === 'prospect' ? 'prospect' : 'klant']++;
+    }
+    visitCursor = page.list_complete ? undefined : page.cursor;
+  } while (visitCursor);
 
   return jsonResponse({
     categories,

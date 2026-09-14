@@ -681,6 +681,7 @@ function buildStaticInstructions() {
     '- "no_opinion": zuiver administratieve notitie zonder enig oordeel over product/dienst (bv. "bezoek afgelegd", "staal afgegeven", "offerte besproken", "nog niet opgestart").',
     'Bij twijfel: een opgeloste klacht zonder verdere negatieve toon → "neutral" (niet "negative"); een aanhoudende/onopgeloste klacht → "negative"; een zuiver informatieve/administratieve zin zonder klantoordeel → "no_opinion" (niet "neutral").',
     'Deze lijst bepaalt rechtstreeks de betrouwbaarheidsscore in de tool — sla dus geen enkel id over, ook niet wanneer het overduidelijk "no_opinion" is.',
+    'Dit geldt ook — en vooral — wanneer een opmerking niet of nauwelijks over de opgegeven categorie gaat. Lange bezoekverslagen behandelen vaak meerdere producten en onderwerpen tegelijk; blijft er voor deze categorie weinig of niets over, geef dan voor dat id gewoon "no_opinion" en geen enkele tag. Een id weglaten omdat de opmerking "er niet over gaat" is nooit correct: de lijst moet élk id bevatten dat hieronder staat.',
     '',
     '--- VASTE TAXONOMIE (topic_tags) ---',
     'In plaats van zelf thema\'s te verzinnen, classificeer je élke opmerking die een classificeerbaar aspect bevat met één of meer vaste tags uit onderstaande lijst (domein + onderwerp). Eén opmerking mag meerdere tags krijgen als ze meerdere aspecten bevat (bv. zowel een levertermijn-klacht als een prijsvergelijking). Opmerkingen die louter administratief zijn zonder enig classificeerbaar aspect (bv. "Bezoek afgelegd", "Stalen afgegeven") mogen 0 tags krijgen — verzin er niets bij.',
@@ -690,7 +691,7 @@ function buildStaticInstructions() {
     'BELANGRIJK: verzin geen tag of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Geef nooit de klantnaam mee — het id volstaat, de tool vult de naam zelf aan. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     '--- PROSPECTS: prospect_signals ---',
-    'Geef voor "prospecting" enkel de lijst "prospect_signals" terug: exact één entry per genummerd prospect-id bij "PROSPECTS" (elk id begint met "P", bv. "P1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Kies per id een vaste waarde voor "interest" en "barrier"; "detail" blijft leeg als er niets concreets te melden valt. Verzin geen interesse of drempel die niet uit de tekst van de opmerking zelf blijkt.',
+    'Geef voor "prospecting" enkel de lijst "prospect_signals" terug: exact één entry per genummerd prospect-id bij "PROSPECTS" (elk id begint met "P", bv. "P1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Kies per id een vaste waarde voor "interest" en "barrier"; "detail" blijft leeg als er niets concreets te melden valt. Verzin geen interesse of drempel die niet uit de tekst van de opmerking zelf blijkt. Gaat een opmerking niet of nauwelijks over deze categorie, geef dan "geen" voor beide en laat "detail" leeg — een id weglaten is nooit correct.',
   ].join('\n');
 }
 

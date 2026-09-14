@@ -503,6 +503,14 @@ export default {
         if (!r.key || !r.sourceFile) return; // ontbrekende Fase 4-velden — niet cachen
         const id = existingFmt.ids[i];
         const sentimentEntry = sentimentsById.get(id);
+        // Heeft de AI dit id overgeslagen, dan slaan we het NIET op. Anders
+        // belandt er een record met een lege classificatie in de cache, en
+        // omdat de kostenrem alles overslaat wat al gecachet is, zou dat gat
+        // nooit meer dichtgaan. Gemeten 14/09 op history_BE_04-2026.xls: Home
+        // gaf 22 van de 52 ids niet terug, zonder dat het antwoord afgekapt
+        // was. Zo wordt het bij de volgende "Opladen" gewoon opnieuw
+        // geprobeerd.
+        if (!sentimentEntry) return;
         const record = {
           category: categoryKey,
           sourceFile: r.sourceFile,
@@ -516,7 +524,7 @@ export default {
           status: r.status || '',
           remark: r.remark || '',
           potential: Number(r.potential) || 0,
-          sentiment: sentimentEntry ? sentimentEntry.sentiment : null,
+          sentiment: sentimentEntry.sentiment,
           tags: tagsById.get(id) || [],
           kind: 'existing',
           storedAt: new Date().toISOString(),
@@ -543,6 +551,7 @@ export default {
         if (!r.key || !r.sourceFile) return;
         const id = prospectingFmt.ids[i];
         const sig = signalsById.get(id);
+        if (!sig) return; // zie hierboven: niet half opslaan
         const record = {
           category: categoryKey,
           sourceFile: r.sourceFile,
@@ -556,9 +565,9 @@ export default {
           status: r.status || '',
           remark: r.remark || '',
           potential: Number(r.potential) || 0,
-          interest: sig ? sig.interest : null,
-          barrier: sig ? sig.barrier : null,
-          detail: sig ? sig.detail || '' : '',
+          interest: sig.interest,
+          barrier: sig.barrier,
+          detail: sig.detail || '',
           kind: 'prospect',
           storedAt: new Date().toISOString(),
         };

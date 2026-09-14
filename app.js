@@ -2481,15 +2481,34 @@ function renderGlobalSection(overview) {
   const dunneLijstTekst = (max, soort) =>
     `Te weinig gedeelde ${soort} om te rangschikken: het breedst genoemde onderwerp komt bij ${max} klant${max === 1 ? '' : 'en'} voor, en we tonen er pas een top drie vanaf ${overview.minBreedGedragen}. Hieronder staan ze wel per productcategorie.`;
 
+  // Ook de cross-categorie top drie is openklapbaar: dezelfde klantenlijst met
+  // detailzinnen als de blokken per categorie hieronder. Rijen zonder klanten
+  // achter zich (de prospect-drempels) blijven een gewone regel.
   const rankedList = (items, badgeClass, badgeText, emptyText) => {
     if (!items.length) return `<p class="narrative">${emptyText}</p>`;
-    return items.map((it) => `
+    return items.map((it) => {
+      const klantDetails = it.klantDetails
+        || (it.klanten || []).map((naam) => ({ naam, details: [] }));
+      const badges = `<span class="theme-badges"><span class="pill ${badgeClass}">${badgeText}</span> <span class="count-badge">${it.count}</span></span>`;
+      if (!klantDetails.length) {
+        return `
       <div class="ranked-row">
         <span class="ranked-cat">${escapeHtml(it.label)}</span>
         <span class="ranked-text">${escapeHtml(it.text)}</span>
         <span class="pill ${badgeClass}">${badgeText}</span>
         <span class="count-badge">${it.count}</span>
-      </div>`).join('');
+      </div>`;
+      }
+      return `
+      <details class="theme-details ranked-details">
+        <summary>
+          <span class="ranked-cat">${escapeHtml(it.label)}</span>
+          <span class="ranked-text">${escapeHtml(it.text)}</span>
+          ${badges}
+        </summary>
+        ${klantLijstHtml(klantDetails, it.cat, 'existing')}
+      </details>`;
+    }).join('');
   };
 
   // Per categorie de top 3, openklapbaar met per klant het concrete
@@ -2615,15 +2634,19 @@ function renderDetailsBlock(label, names, badgeHtml, cat, part) {
 // eronder — dezelfde opbouw als renderTopicBlock op de categorietabs. Het
 // globaal tab toonde enkel namen, waardoor je wel zag wíé iets zei maar niet
 // wát. Valt terug op een kale naam wanneer er voor die klant geen detail is.
-function renderDetailsBlockMetUitleg(label, klantDetails, badgeHtml, cat, part) {
-  const lijst = klantDetails || [];
-  const items = lijst.map(({ naam, details }) => {
+function klantLijstHtml(klantDetails, cat, part) {
+  const items = (klantDetails || []).map(({ naam, details }) => {
     const detailsHtml = (details && details.length)
       ? `<ul class="topic-detail-list">${details.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
       : '';
     return `<div>${customerLinkHtml(naam, cat, part)}${detailsHtml}</div>`;
   }).join('');
-  const inner = items ? `<div class="customer-list">${items}</div>` : '';
+  return items ? `<div class="customer-list">${items}</div>` : '';
+}
+
+function renderDetailsBlockMetUitleg(label, klantDetails, badgeHtml, cat, part) {
+  const lijst = klantDetails || [];
+  const inner = klantLijstHtml(lijst, cat, part);
   return `
     <details class="theme-details">
       <summary>

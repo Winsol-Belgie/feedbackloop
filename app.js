@@ -1162,7 +1162,7 @@ function matchesFilters(row) {
   if (klantVal && row['name'] !== klantVal) return false;
   const van = filterVan.value;
   const tot = filterTot.value;
-  const d = toIsoDate(row['date']);
+  const d = toIsoDate(row['date'], row['sourceFile']);
   if (van && (!d || d < van)) return false;
   if (tot && (!d || d > tot)) return false;
   return true;
@@ -1225,12 +1225,32 @@ function dedupeRows(rows) {
 // we die genormaliseerde vorm apart naast de originele tekst. Zonder dit zou
 // een periodefilter stilzwijgend verkeerde rijen tonen (tekstvergelijking op
 // "14-09-2026" sorteert op dag, niet op jaar).
-function toIsoDate(str) {
-  const d = parseReportDate(str);
-  if (!d) return '';
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd}`;
+// Het jaartal staat NIET in de datumkolom: de export schrijft "Tue 31-03".
+// Het jaar zit enkel in de bestandsnaam ("history_BE_03-2026.xls"), dus dat is
+// de enige betrouwbare bron. parseReportDate valt zonder jaartal terug op het
+// HUIDIGE jaar, wat stilzwijgend fout gaat zodra je een export van vorig jaar
+// oplaadt — vandaar dat we hier het jaar uit de bestandsnaam halen.
+function toIsoDate(str, sourceFile) {
+  const m = String(str || '').match(/(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const dag = m[1];
+  const maand = parseInt(m[2], 10);
+  const f = String(sourceFile || '').match(/_(\d{2})-(\d{4})\./);
+  if (!f) {
+    // Geen bruikbare bestandsnaam: terugvallen op het gedrag van
+    // parseReportDate (huidig jaar) i.p.v. de datum helemaal te laten vallen.
+    const d = parseReportDate(str);
+    if (!d) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  const bestandsMaand = parseInt(f[1], 10);
+  let jaar = parseInt(f[2], 10);
+  // Een maandexport kan een rapport van eind vorige maand bevatten. Loopt dat
+  // over een jaargrens (bestand januari, rapport december), dan hoort het bij
+  // het vorige jaar.
+  if (bestandsMaand === 1 && maand === 12) jaar -= 1;
+  else if (bestandsMaand === 12 && maand === 1) jaar += 1;
+  return `${jaar}-${String(maand).padStart(2, '0')}-${dag}`;
 }
 
 function parseReportDate(str) {
@@ -1442,7 +1462,7 @@ function buildAggregation(rows) {
       remark,
       rep: row['rep'] || row['user'] || '',
       date: row['date'] || '',
-      dateIso: toIsoDate(row['date']),
+      dateIso: toIsoDate(row['date'], row['sourceFile']),
       type: row['type'] || '',
       status: row['status'] || '',
       regio: row['regio'] || '',

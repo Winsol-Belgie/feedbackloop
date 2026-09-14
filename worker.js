@@ -1067,8 +1067,19 @@ async function handleCachedResults(body, env) {
   // periodefilter en uit de grafiek vallen.
   const isoVanRecord = (rec) => {
     if (rec.dateIso) return rec.dateIso;
-    const m = String(rec.date || '').match(/(\d{2})-(\d{2})-(\d{4})/);
-    return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+    // Records van vóór de invoering van dateIso dragen de ruwe waarde uit de
+    // export, en die bevat GEEN jaartal ("Tue 31-03"). Het jaar staat enkel in
+    // de bestandsnaam ("history_BE_03-2026.xls"), die wel in elk record zit.
+    const m = String(rec.date || '').match(/(\d{2})-(\d{2})/);
+    if (!m) return '';
+    const f = String(rec.sourceFile || '').match(/_(\d{2})-(\d{4})\./);
+    if (!f) return '';
+    const maand = parseInt(m[2], 10);
+    const bestandsMaand = parseInt(f[1], 10);
+    let jaar = parseInt(f[2], 10);
+    if (bestandsMaand === 1 && maand === 12) jaar -= 1;
+    else if (bestandsMaand === 12 && maand === 1) jaar += 1;
+    return `${jaar}-${String(maand).padStart(2, '0')}-${m[1]}`;
   };
   const inPeriode = (d) => {
     if (!d) return !vanFilter && !totFilter;
@@ -1108,7 +1119,13 @@ async function handleCachedResults(body, env) {
   }
   // Bezoeken per maand, opgesplitst klant/prospect — voedt de grafiek in de
   // client. Kost niets extra: we lopen de records hier toch al door.
+  // Eén bezoekrapport kan over meerdere categorieën gaan en wordt dan als
+  // meerdere records bewaard. Voor "bezoeken per maand" tellen we daarom
+  // unieke rapporten (de sleutel is een hash van klant + datum + opmerking),
+  // anders telt een rapport over drie categorieën drie keer mee — vandaar
+  // eerder 234 "bezoeken" op 211 rijen.
   const perMaand = {};
+  const gezien = new Set();
   let kept = 0;
   for (const rec of records) {
     if (!rec || !categories[rec.category]) continue;
@@ -1118,7 +1135,9 @@ async function handleCachedResults(body, env) {
     const bucket = categories[rec.category];
     const isProspect = rec.kind === 'prospect';
     const maand = recIso.slice(0, 7); // JJJJ-MM
-    if (maand) {
+    const bezoekId = `${rec.sourceFile}|${rec.key}`;
+    if (maand && !gezien.has(bezoekId)) {
+      gezien.add(bezoekId);
       if (!perMaand[maand]) perMaand[maand] = { klant: 0, prospect: 0 };
       perMaand[maand][isProspect ? 'prospect' : 'klant']++;
     }

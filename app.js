@@ -2125,10 +2125,17 @@ function renderProspectSignals(signals, cat) {
     perInteresse[i] = (perInteresse[i] || 0) + 1;
     const b = s.barrier || 'geen';
     if (b === 'geen') continue;
-    if (!perDrempel.has(b)) perDrempel.set(b, { klanten: new Set(), details: [] });
+    // Detail per klant bijhouden i.p.v. als losse lijst: anders belandde de
+    // eerste willekeurige detailzin als een lange pill rechts van de titel,
+    // zonder dat je zag bij wie ze hoorde.
+    if (!perDrempel.has(b)) perDrempel.set(b, { klanten: new Set(), details: new Map() });
     const bucket = perDrempel.get(b);
     if (s.customer) bucket.klanten.add(s.customer);
-    if (s.detail) bucket.details.push(s.detail);
+    if (s.customer && s.detail) {
+      if (!bucket.details.has(s.customer)) bucket.details.set(s.customer, []);
+      const lijst = bucket.details.get(s.customer);
+      if (!lijst.includes(s.detail)) lijst.push(s.detail);
+    }
   }
   const volgorde = ['concreet', 'orienterend', 'geen'];
   const tellers = volgorde
@@ -2138,9 +2145,14 @@ function renderProspectSignals(signals, cat) {
   const drempels = [...perDrempel.entries()]
     .sort((a, b) => b[1].klanten.size - a[1].klanten.size)
     .map(([key, v]) => {
-      const namen = [...v.klanten];
-      const detail = v.details.length ? `<span class="pill neutral">${escapeHtml(v.details[0])}</span>` : '';
-      return renderDetailsBlock(BARRIER_LABELS[key] || key, namen, detail, cat, 'prospecting');
+      const klantDetails = [...v.klanten].map((naam) => ({ naam, details: v.details.get(naam) || [] }));
+      return renderDetailsBlockMetUitleg(
+        BARRIER_LABELS[key] || key,
+        klantDetails,
+        '<span class="pill neutral">drempel</span>',
+        cat,
+        'prospecting'
+      );
     })
     .join('');
   return `

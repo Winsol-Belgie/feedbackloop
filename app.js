@@ -292,18 +292,18 @@ const TAXONOMY = {
   product_techniek: {
     label: 'Product & Techniek',
     topics: {
-      onderdeel_defect: 'Onderdeel-/kwaliteitsprobleem',
+      onderdeel_defect: 'Onderdeelkwaliteit',
       bediening_domotica: 'Bediening/motorisatie/domotica',
       kleur_afwerking: 'Kleur/afwerking',
-      maatvoering_beperking: 'Maatvoering/technische beperking',
-      feature_wens: 'Ontbrekende functionaliteit/productwens',
+      maatvoering_beperking: 'Maatvoering/technische mogelijkheden',
+      feature_wens: 'Functionaliteit/productwens',
     },
   },
   levering_logistiek: {
     label: 'Levering & Logistiek',
     topics: {
-      levertermijn: 'Levertermijn te lang',
-      foutieve_levering: 'Onvolledige/foutieve levering',
+      levertermijn: 'Levertermijn',
+      foutieve_levering: 'Juistheid van levering',
       transportplanning: 'Transportplanning',
     },
   },
@@ -2317,6 +2317,16 @@ function buildGlobalOverview(agg, aiCategories) {
 
   }
 
+  // Een "breed gedragen" signaal is er een dat door minstens MIN_BREED_GEDRAGEN
+  // verschillende klanten genoemd wordt. Zonder die ondergrens presenteert de
+  // kop "de drie breedst gedragen signalen" een onderwerp dat twee mensen
+  // vermeldden als een trend — vooral zichtbaar aan de positieve kant, waar
+  // bezoekverslagen van nature weinig vastleggen (vertegenwoordigers noteren
+  // problemen en to do's, zelden een compliment).
+  const MIN_BREED_GEDRAGEN = 3;
+  const breedGedragen = (lijst) => lijst.filter((it) => it.count >= MIN_BREED_GEDRAGEN).slice(0, 3);
+  const maxCount = (lijst) => (lijst.length ? lijst[0].count : 0);
+
   const byCountDesc = (a, b) => b.count - a.count;
   allIssues.sort(byCountDesc);
   allWishes.sort(byCountDesc);
@@ -2364,9 +2374,13 @@ function buildGlobalOverview(agg, aiCategories) {
     totaalScore,
     totaalSample,
     totaalKlanten,
-    topIssues: allIssues.slice(0, 3),
-    topWishes: allWishes.slice(0, 3),
-    topPositive: allPositive.slice(0, 3),
+    topIssues: breedGedragen(allIssues),
+    topWishes: breedGedragen(allWishes),
+    topPositive: breedGedragen(allPositive),
+    maxIssues: maxCount(allIssues),
+    maxWishes: maxCount(allWishes),
+    maxPositive: maxCount(allPositive),
+    minBreedGedragen: MIN_BREED_GEDRAGEN,
     positiefPerCategorie: perCategorieTop(allPositive),
     problemenPerCategorie: perCategorieTop(allIssues),
     wensenPerCategorie: perCategorieTop(allWishes),
@@ -2415,6 +2429,13 @@ function renderGlobalSection(overview) {
     'score-total'
   );
 
+  // Staat er wel materiaal, maar haalt niets de ondergrens, dan is "geen
+  // signalen" misleidend: er zijn er wel, ze worden enkel door te weinig
+  // klanten gedeeld om van een trend te spreken. Dat zeggen we met zoveel
+  // woorden, en verwijzen door naar de lijst per categorie hieronder.
+  const dunneLijstTekst = (max, soort) =>
+    `Te weinig gedeelde ${soort} om te rangschikken: het breedst genoemde onderwerp komt bij ${max} klant${max === 1 ? '' : 'en'} voor, en we tonen er pas een top drie vanaf ${overview.minBreedGedragen}. Hieronder staan ze wel per productcategorie.`;
+
   const rankedList = (items, badgeClass, badgeText, emptyText) => {
     if (!items.length) return `<p class="narrative">${emptyText}</p>`;
     return items.map((it) => `
@@ -2448,18 +2469,18 @@ function renderGlobalSection(overview) {
     </div>
     <div class="card">
       <h2 class="part-title">Sterke punten</h2>
-      <p class="part-sub">De drie breedst gedragen positieve signalen over alle categorieën heen, daarna per categorie de top drie. Gerangschikt op het aantal unieke klanten dat het onderwerp positief vermeldt. Klik een onderwerp open voor de klanten en hun bezoekrapport.</p>
-      ${rankedList(overview.topPositive, 'positive', 'positief', 'Geen uitgesproken positieve signalen.')}
+      <p class="part-sub">De positieve signalen die door minstens drie verschillende klanten gedeeld worden, daarna per categorie de top drie. Gerangschikt op het aantal unieke klanten dat het onderwerp positief vermeldt. Klik een onderwerp open voor de klanten en hun bezoekrapport.</p>
+      ${rankedList(overview.topPositive, 'positive', 'positief', overview.maxPositive ? dunneLijstTekst(overview.maxPositive, 'positieve signalen') : 'Geen uitgesproken positieve signalen.')}
       <h2 class="part-title" style="margin-top:18px;">Per productcategorie</h2>
       ${perCategorieBlok(overview.positiefPerCategorie, 'positive', 'positief', 'Geen positieve signalen per categorie.')}
     </div>
     <div class="card">
       <h2 class="part-title">Werkpunten</h2>
-      <p class="part-sub">Problemen en wensen uit Product &amp; Techniek, Levering &amp; Logistiek en Service &amp; Herstelling. Eerst de drie breedst gedragen over alle categorieën heen, daarna per categorie de top drie.</p>
+      <p class="part-sub">Problemen en wensen uit Product &amp; Techniek, Levering &amp; Logistiek en Service &amp; Herstelling. Eerst wat door minstens drie verschillende klanten gedeeld wordt, daarna per categorie de top drie.</p>
       <h3 class="part-subtitle">Grootste problemen</h3>
-      ${rankedList(overview.topIssues, 'issue', 'probleem', 'Geen technische/logistieke/service-meldingen gerapporteerd.')}
+      ${rankedList(overview.topIssues, 'issue', 'probleem', overview.maxIssues ? dunneLijstTekst(overview.maxIssues, 'problemen') : 'Geen technische/logistieke/service-meldingen gerapporteerd.')}
       <h3 class="part-subtitle">Meest gevraagde wensen</h3>
-      ${rankedList(overview.topWishes, 'request', 'wens', 'Geen gewenste features gerapporteerd.')}
+      ${rankedList(overview.topWishes, 'request', 'wens', overview.maxWishes ? dunneLijstTekst(overview.maxWishes, 'wensen') : 'Geen gewenste features gerapporteerd.')}
       <h2 class="part-title" style="margin-top:18px;">Problemen per productcategorie</h2>
       ${perCategorieBlok(overview.problemenPerCategorie, 'issue', 'probleem', 'Geen problemen per categorie.')}
       <h2 class="part-title" style="margin-top:18px;">Wensen per productcategorie</h2>

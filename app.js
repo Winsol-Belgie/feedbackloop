@@ -831,11 +831,12 @@ cacheResetBtn.addEventListener('click', async () => {
 // een nieuwe AI-analyse gestart moet worden. Hergebruikt bewust dezelfde
 // render-functies als het admin-pad (renderResults/buildGlobalOverview/
 // renderTopicDomains e.a.) door er een "agg"/"aiCategories" van dezelfde
-// vorm voor op te bouwen — enkel de verhalende AI-tekst (general_impression,
-// benchmark_product/prijs, prospecting potential_summary/barriers)
-// ontbreekt, want die is nooit per opmerking gecached (bewuste keuze in
-// Fase 4: enkel bestaande klanten, enkel sentiment + topic_tags) en zou
-// zonder nieuwe AI-aanroep niet te reconstrueren zijn.
+// vorm voor op te bouwen. Sinds 14/09 is dat een volledig beeld: er zijn geen
+// verhalende AI-teksten meer (die werden per analyse gegenereerd, nooit
+// bewaard en dus nooit zichtbaar voor een user — ze zijn daarom helemaal uit
+// het schema gehaald, wat meteen output-tokens scheelt). Alles wat getoond
+// wordt — cijfers, thema's, prospect-classificatie, EUR-waardes — komt uit de
+// KV.
 // ============================================================
 async function loadUserView() {
   userViewStatus.textContent = '';
@@ -941,15 +942,10 @@ async function renderCachedFilter(regio, rep, klant, dateFrom, dateTo, onProgres
     };
     aiCategories[cat] = {
       existing_customers: {
-        general_impression: c.customers.length
-          ? 'Verhalende samenvatting is niet beschikbaar in deze weergave uit de cache — enkel meteen na "Opladen" zie je die (eenmalig, wordt niet bewaard). De cijfers en thema\'s hieronder komen wél rechtstreeks uit de cache.'
-          : '',
         customer_sentiments: c.customer_sentiments,
         topic_tags: c.topic_tags,
-        benchmark_product: '',
-        benchmark_price: '',
       },
-      prospecting: { potential_summary: '', barriers: [] },
+      prospecting: {},
     };
   }
   lastAgg = agg;
@@ -1550,7 +1546,10 @@ function buildAggregation(rows) {
     };
     for (const cat of rowCats) {
       if (existing) {
-        agg[cat].existing.customers.push(detail);
+        // Ook bij bestaande klanten de EUR-waarde meegeven: ze staat in
+        // dezelfde Potential-kolom en hoort in de KV thuis, zodat de
+        // user-weergave er ook over beschikt.
+        agg[cat].existing.customers.push({ ...detail, potential: potentialForCategory(row, cat) });
       } else {
         // Het potentieel hangt aan de rij, maar wordt per categorie bepaald
         // (productspecifieke kolom met terugval op de algemene "Potential").
@@ -1637,12 +1636,6 @@ function chunkArray(arr, size) {
   const chunks = [];
   for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
   return chunks;
-}
-
-// Voegt tekstvelden van meerdere batches samen tot één geheel (getrimd,
-// lege stukken overgeslagen, met een spatie gescheiden).
-function joinText(parts) {
-  return parts.map((p) => (p || '').trim()).filter(Boolean).join(' ');
 }
 
 // Eén AI-aanroep voor één batch (deel van) een categorie.
@@ -1739,25 +1732,20 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
 // Voegt de analyses van meerdere batches van dezelfde categorie samen tot
 // één object met dezelfde vorm als een los batch-resultaat, zodat
 // buildGlobalOverview/renderResults ongewijzigd kunnen blijven. Lijstvelden
-// (customer_sentiments, topic_tags, barriers) worden geconcateneerd —
+// (customer_sentiments, topic_tags, prospect_signals) worden geconcateneerd —
 // gelijkaardige topic_tags uit verschillende batches kunnen dus als
 // aparte entries blijven staan i.p.v. samengevoegd tot één groep (geen
-// semantische deduplicatie tussen batches); tekstvelden worden
-// samengevoegd met joinText.
+// semantische deduplicatie tussen batches).
 function mergeCategoryAnalyses(analyses) {
   const ec = analyses.map((a) => a.existing_customers || {});
   const pr = analyses.map((a) => a.prospecting || {});
   return {
     existing_customers: {
-      general_impression: joinText(ec.map((e) => e.general_impression)),
       customer_sentiments: ec.flatMap((e) => e.customer_sentiments || []),
       topic_tags: ec.flatMap((e) => e.topic_tags || []),
-      benchmark_product: joinText(ec.map((e) => e.benchmark_product)),
-      benchmark_price: joinText(ec.map((e) => e.benchmark_price)),
     },
     prospecting: {
-      potential_summary: joinText(pr.map((p) => p.potential_summary)),
-      barriers: pr.flatMap((p) => p.barriers || []),
+      prospect_signals: pr.flatMap((p) => p.prospect_signals || []),
     },
   };
 }
@@ -1980,7 +1968,6 @@ function renderResults(agg, aiCategories, globalOverview) {
     const stats = agg[cat];
     const ai = (aiCategories && aiCategories[cat]) || {};
     const existingAi = ai.existing_customers || {};
-    const prospAi = ai.prospecting || {};
 
     section.innerHTML = `
       <div class="card">
@@ -1990,14 +1977,11 @@ function renderResults(agg, aiCategories, globalOverview) {
           <div class="stat"><b>${stats.existing.customers.length}</b><span>bestaande klanten met input</span></div>
         </div>
         ${renderCustomerList(stats.existing.customers, 'Bekijk welke klanten', cat, 'existing')}
-        <p class="narrative">${escapeHtml(existingAi.general_impression || 'Geen data beschikbaar.')}</p>
+
         <h2 class="part-title" style="margin-top:18px;">Signalen voor R&amp;D &amp; Product Management</h2>
         ${renderTopicDomains(existingAi.topic_tags, cat, 'existing')}
-        <h2 class="part-title" style="margin-top:18px;">Benchmark product</h2>
         ${renderWishBlock(existingAi.topic_tags, cat, 'existing')}
-        <p class="narrative">${escapeHtml(existingAi.benchmark_product || '—')}</p>
-        <h2 class="part-title" style="margin-top:18px;">Benchmark prijs</h2>
-        <p class="narrative">${escapeHtml(existingAi.benchmark_price || '—')}</p>
+
       </div>
       <div class="card">
         <h2 class="part-title">Deel 2 — Prospecting</h2>
@@ -2008,9 +1992,7 @@ function renderResults(agg, aiCategories, globalOverview) {
         </div>
         ${renderCustomerList(stats.prospecting.customers, 'Bekijk welke prospects', cat, 'prospecting')}
         ${renderProspectSignals(stats.prospecting.signals, cat)}
-        <p class="narrative">${escapeHtml(prospAi.potential_summary || 'Geen data beschikbaar.')}</p>
-        <h2 class="part-title" style="margin-top:18px;">Drempels om over te stappen</h2>
-        ${renderThemes(prospAi.barriers, cat, 'prospecting')}
+
       </div>
     `;
     sectionsEl.appendChild(section);
@@ -2103,7 +2085,6 @@ function buildGlobalOverview(agg, aiCategories) {
   const allWishes = [];
   const allPositive = [];
   const allBarriers = [];
-  const benchmarks = [];
   const competitorCustomers = new Map(); // concurrent-naam -> Set(klanten)
   let totalPotential = 0;
   let totalProspects = 0;
@@ -2113,7 +2094,6 @@ function buildGlobalOverview(agg, aiCategories) {
     const stats = agg[cat];
     const ai = (aiCategories && aiCategories[cat]) || {};
     const existingAi = ai.existing_customers || {};
-    const prospAi = ai.prospecting || {};
     const tags = existingAi.topic_tags || [];
     const sentiments = existingAi.customer_sentiments || [];
 
@@ -2189,16 +2169,23 @@ function buildGlobalOverview(agg, aiCategories) {
       if (posCustomers.size) allPositive.push({ cat, label, text: topicLabel, count: posCustomers.size });
     }
 
-    for (const t of (prospAi.barriers || [])) {
-      allBarriers.push({ cat, label, text: t.label, count: (t.customers || []).length });
+    // Drempels komen nu uit de vaste classificatie per prospect-opmerking (die
+    // in de KV zit), niet meer uit een verhalend AI-veld — zo werkt dit blok
+    // ook in de weergave uit de cache.
+    const drempelKlanten = new Map();
+    for (const s of (stats.prospecting.signals || [])) {
+      if (!s || !s.barrier || s.barrier === 'geen') continue;
+      if (!drempelKlanten.has(s.barrier)) drempelKlanten.set(s.barrier, new Set());
+      if (s.customer) drempelKlanten.get(s.barrier).add(s.customer);
+    }
+    for (const [key, set] of drempelKlanten) {
+      allBarriers.push({ cat, label, text: BARRIER_LABELS[key] || key, count: set.size });
     }
 
     totalPotential += stats.prospecting.potentialSum || 0;
     totalProspects += stats.prospecting.customers.length;
 
-    if (existingAi.benchmark_product || existingAi.benchmark_price) {
-      benchmarks.push({ cat, label, product: existingAi.benchmark_product || '—', price: existingAi.benchmark_price || '—' });
-    }
+
   }
 
   const byCountDesc = (a, b) => b.count - a.count;
@@ -2221,7 +2208,6 @@ function buildGlobalOverview(agg, aiCategories) {
     topCompetitors,
     totalPotential,
     totalProspects,
-    benchmarks,
   };
 }
 
@@ -2263,13 +2249,6 @@ function renderGlobalSection(overview) {
       </div>`).join('');
   };
 
-  const benchmarkRows = overview.benchmarks.map((b) => `
-    <div class="benchmark-row">
-      <div class="benchmark-cat">${escapeHtml(b.label)}</div>
-      <div class="benchmark-col"><b>Product</b><p class="narrative">${escapeHtml(b.product)}</p></div>
-      <div class="benchmark-col"><b>Prijs</b><p class="narrative">${escapeHtml(b.price)}</p></div>
-    </div>`).join('');
-
   return `
     <div class="card">
       <h2 class="part-title">Globale barometer</h2>
@@ -2307,10 +2286,6 @@ function renderGlobalSection(overview) {
       </div>
       <h2 class="part-title" style="margin-top:16px;">Grootste drempels</h2>
       ${rankedList(overview.topBarriers, 'neutral', 'drempel', 'Geen drempels gerapporteerd.')}
-    </div>
-    <div class="card">
-      <h2 class="part-title">Benchmark-snapshot</h2>
-      ${benchmarkRows || '<p class="narrative">Geen benchmarkdata beschikbaar.</p>'}
     </div>
   `;
 }

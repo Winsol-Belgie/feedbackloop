@@ -2209,16 +2209,31 @@ function buildGlobalOverview(agg, aiCategories) {
       byCustomer.get(s.customer).push(s.sentiment);
     }
     for (const [customer, list] of byCustomer) {
-      // Bij meerdere opmerkingen van dezelfde klant telt het meest
-      // kritische signaal: negatief > positief > neutraal > geen mening.
-      let resolved = 'no_opinion';
-      if (list.includes('negative')) resolved = 'negative';
-      else if (list.includes('positive')) resolved = 'positive';
-      else if (list.includes('neutral')) resolved = 'neutral';
-      if (resolved === 'no_opinion') continue;
+      // Positief en negatief wegen even zwaar bij het bepalen van het oordeel
+      // van één klant: we tellen zijn positieve en negatieve opmerkingen en
+      // kijken welke kant doorweegt. Evenveel van beide (bv. één lovende en
+      // één kritische opmerking) geeft neutraal.
+      //
+      // Voorheen won het meest kritische signaal altijd: één klacht maakte een
+      // verder tevreden klant volledig negatief. Dat drukte de scores
+      // structureel naar beneden. De klachten zelf blijven onverminderd
+      // zichtbaar bij de werkpunten en de thema's — enkel deze optelling is
+      // evenwichtiger geworden.
+      let pos = 0;
+      let neg = 0;
+      let neu = 0;
+      for (const s of list) {
+        if (s === 'positive') pos++;
+        else if (s === 'negative') neg++;
+        else if (s === 'neutral') neu++;
+      }
+      // Enkel "geen mening": deze klant telt nergens mee, ook niet in de noemer.
+      if (!pos && !neg && !neu) continue;
       anySet.add(customer);
-      if (resolved === 'negative') negSet.add(customer);
-      if (resolved === 'positive') posSet.add(customer);
+      if (neg > pos) negSet.add(customer);
+      else if (pos > neg) posSet.add(customer);
+      // Gelijkspel of enkel neutrale opmerkingen: telt wel in de noemer, maar
+      // draagt niets bij aan de teller.
     }
 
     const sampleSize = anySet.size;
@@ -2426,7 +2441,7 @@ function renderGlobalSection(overview) {
   return `
     <div class="card">
       <h2 class="part-title">Globale barometer</h2>
-      <p class="part-sub">Score per productcategorie, berekend op unieke bestaande klanten met een uitgesproken mening. Per klant telt het meest kritische signaal: negatief weegt zwaarder dan positief, positief zwaarder dan neutraal. Klanten zonder uitgesproken mening vallen weg. Het getal rechts (bv. "43/95") leest als: op 95 klanten met een opmerking in deze categorie hadden er 43 een uitgesproken mening.</p>
+      <p class="part-sub">Score per productcategorie, berekend op unieke bestaande klanten met een uitgesproken mening. Per klant wegen zijn positieve en negatieve opmerkingen even zwaar: telt de ene kant door, dan is die klant positief of negatief; evenveel van beide maakt hem neutraal. Klanten zonder uitgesproken mening vallen weg; neutrale klanten tellen wel mee in de noemer. Het getal rechts (bv. "43/95") leest als: op 95 klanten met een opmerking in deze categorie hadden er 43 een uitgesproken mening.</p>
       <div class="score-list">${scoreRows}</div>
       <div class="score-list score-total-wrap">${totaalRij}</div>
       <p class="part-sub" style="margin-top:8px;">De totaalscore is een gewogen gemiddelde: elke categorie weegt mee naar het aantal klanten met een uitgesproken mening, zodat een categorie waarover maar enkelen iets zeiden het geheel niet scheeftrekt.</p>

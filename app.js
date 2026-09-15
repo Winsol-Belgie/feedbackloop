@@ -2329,16 +2329,20 @@ function bouwZoekSectie() {
       <h2 class="part-title">Zoeken in de bezoekverslagen</h2>
       <p class="part-sub">Zoek op een woord (bv. "Z!P" of "Casambi"), op een product of thema uit de lijst — die vindt ook de andere schrijfwijzen en de Franse termen — of op een onderwerp zoals de AI het geklasseerd heeft. De regio, vertegenwoordiger, klant en periode uit de filterkaart bovenaan gelden ook hier, zodat je binnen je selectie zoekt.</p>
       <div class="filter-row">
-        <label>Zoekterm
-          <input type="text" id="zoekQ" placeholder="bv. Z!P, Casambi, Renson">
+        <label class="filter-field">
+          <span>Zoekterm</span>
+          <input type="text" id="zoekQ" placeholder="bv. Z!P, Casambi, LumiSolar">
         </label>
-        <label>Product of thema
+        <label class="filter-field">
+          <span>Product of thema</span>
           <select id="zoekGroep">${groepOpties}</select>
         </label>
-        <label>Onderwerp (AI-classificatie)
+        <label class="filter-field">
+          <span>Onderwerp (AI-classificatie)</span>
           <select id="zoekTopic">${topicOpties}</select>
         </label>
-        <label>Soort bezoek
+        <label class="filter-field">
+          <span>Soort bezoek</span>
           <select id="zoekKind">
             <option value="">Klanten en prospects</option>
             <option value="klant">Enkel bestaande klanten</option>

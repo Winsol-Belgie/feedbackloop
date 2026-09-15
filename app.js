@@ -2361,11 +2361,25 @@ function buildGlobalOverview(agg, aiCategories) {
     const drempelKlanten = new Map();
     for (const s of (stats.prospecting.signals || [])) {
       if (!s || !s.barrier || s.barrier === 'geen') continue;
-      if (!drempelKlanten.has(s.barrier)) drempelKlanten.set(s.barrier, new Set());
-      if (s.customer) drempelKlanten.get(s.barrier).add(s.customer);
+      if (!drempelKlanten.has(s.barrier)) drempelKlanten.set(s.barrier, { klanten: new Set(), details: new Map() });
+      const bucket = drempelKlanten.get(s.barrier);
+      if (!s.customer) continue;
+      bucket.klanten.add(s.customer);
+      if (s.detail) {
+        if (!bucket.details.has(s.customer)) bucket.details.set(s.customer, []);
+        const lijst = bucket.details.get(s.customer);
+        if (!lijst.includes(s.detail)) lijst.push(s.detail);
+      }
     }
-    for (const [key, set] of drempelKlanten) {
-      allBarriers.push({ cat, label, text: BARRIER_LABELS[key] || key, count: set.size });
+    for (const [key, bucket] of drempelKlanten) {
+      allBarriers.push({
+        cat, label, text: BARRIER_LABELS[key] || key, count: bucket.klanten.size,
+        // Drempels gaan over prospects, niet over bestaande klanten — de
+        // klantlink moet dus naar het prospect-deel wijzen.
+        part: 'prospecting',
+        klanten: [...bucket.klanten],
+        klantDetails: metDetails(bucket.klanten, bucket.details),
+      });
     }
 
     totalPotential += stats.prospecting.potentialSum || 0;
@@ -2518,7 +2532,7 @@ function renderGlobalSection(overview) {
           <span class="ranked-text">${escapeHtml(it.text)}</span>
           ${badges}
         </summary>
-        ${klantLijstHtml(klantDetails, it.cat, 'existing')}
+        ${klantLijstHtml(klantDetails, it.cat, it.part || 'existing')}
       </details>`;
     }).join('');
     return `<div class="top-block">${rijen}</div>`;

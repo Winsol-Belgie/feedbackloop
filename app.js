@@ -419,6 +419,7 @@ const usersStatus = document.getElementById('usersStatus');
 const cacheCard = document.getElementById('cacheCard');
 const cacheResetBtn = document.getElementById('cacheResetBtn');
 const cacheResetExistingBtn = document.getElementById('cacheResetExistingBtn');
+const heroSub = document.getElementById('heroSub');
 const cacheResetExistingStatus = document.getElementById('cacheResetExistingStatus');
 const cacheResetProspectsBtn = document.getElementById('cacheResetProspectsBtn');
 const cacheResetProspectsStatus = document.getElementById('cacheResetProspectsStatus');
@@ -452,6 +453,15 @@ function showApp(username, role) {
   topbarUser.textContent = username;
   topbarRole.textContent = role === 'admin' ? 'admin' : 'user';
   const isAdmin = role === 'admin';
+  // De ondertitel spreekt de rol aan die ze leest: een user laadt niets op, dus
+  // "upload de CRM-export" is voor hem enkel ruis. Hij krijgt in twee regels
+  // waar de tool voor dient en wat hij ermee kan.
+  if (heroSub) {
+    heroSub.innerHTML = isAdmin
+      ? 'Upload de CRM-export en laat AI de klantenfeedback analyseren per productcategorie.'
+      : 'Wat vertellen onze klanten en prospects tijdens de bezoeken? Deze tool leest alle bezoekverslagen en bundelt ze per productcategorie.<br>'
+        + 'Filter op regio, vertegenwoordiger, klant of periode en zie meteen wat goed loopt, waar het knelt en welke concurrenten genoemd worden.';
+  }
   // Admin: upload/analyseren/beheer. User: enkel filters op de gecachete
   // data (Fase 5) — welke van de twee kaarten (placeholder of echte
   // filters) verschijnt, hangt af van of de cache al iets bevat; dat wordt

@@ -20,7 +20,7 @@ header.hero::before,header.hero::after{content:"";position:absolute;width:70px;h
 header.hero::before{top:0;left:0;clip-path:polygon(0 0,100% 0,0 100%);}
 header.hero::after{bottom:0;right:0;clip-path:polygon(100% 100%,0 100%,100% 0);}
 header.hero h1{margin:0 0 4px;color:var(--ink);font-weight:700;font-size:26px;}
-header.hero p{margin:0;color:var(--ink-faint);font-size:14px;}
+header.hero p{margin:0;color:var(--ink-faint);font-size:14px;line-height:1.55;max-width:74ch;}
 .card{background:var(--paper-2);border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:20px;}
 .dropzone{border:2px dashed var(--line);border-radius:14px;padding:36px 20px;text-align:center;cursor:pointer;transition:.15s;}
 .dropzone.drag{border-color:var(--accent);background:#fffdf0;}
@@ -248,7 +248,7 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 
   <header class="hero">
     <h1>Feedbackloop</h1>
-    <p>Upload de CRM-export en laat AI de klantenfeedback analyseren per productcategorie.</p>
+    <p id="heroSub">Upload de CRM-export en laat AI de klantenfeedback analyseren per productcategorie.</p>
   </header>
 
   <div class="card" id="userPlaceholderCard" hidden>
@@ -407,6 +407,6 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609150140"></script>
+<script src="app.js?v=202609150200"></script>
 </body>
 </html>

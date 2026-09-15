@@ -85,6 +85,7 @@ h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
 .theme-details .customer-list .topic-detail-list{margin:4px 0 2px;}
 .ranked-details .ranked-cat{align-self:flex-start;}
 .ranked-details summary .ranked-text{color:var(--ink);}
+.comp-split{flex-shrink:0;font-size:11.5px;color:var(--ink-faint);white-space:nowrap;}
 /* Twee lagen op het globaal tab. De kruiscategorie-top is de hoofdlijn: een
    zacht gevuld blok met de gele merkaccent aan de linkerkant (geel als vlak,
    nooit als tekst). De uitsplitsing per productcategorie is de tweede laag en
@@ -385,7 +386,9 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
     <div class="row">
       <button class="btn danger" id="cacheResetBtn" type="button">Cache volledig wissen</button>
       <button class="btn" id="cacheResetExistingBtn" type="button" style="margin-left:10px;">Klant-classificaties wissen (prospects behouden)</button>
+      <button class="btn" id="cacheResetProspectsBtn" type="button" style="margin-left:10px;">Prospect-classificaties wissen (klanten behouden)</button>
       <p class="status" id="cacheResetExistingStatus"></p>
+      <p class="status" id="cacheResetProspectsStatus"></p>
       <span class="status" id="cacheStatus"></span>
     </div>
   </div>
@@ -404,6 +407,6 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609150030"></script>
+<script src="app.js?v=202609150140"></script>
 </body>
 </html>

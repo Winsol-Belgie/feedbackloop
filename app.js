@@ -420,6 +420,8 @@ const cacheCard = document.getElementById('cacheCard');
 const cacheResetBtn = document.getElementById('cacheResetBtn');
 const cacheResetExistingBtn = document.getElementById('cacheResetExistingBtn');
 const cacheResetExistingStatus = document.getElementById('cacheResetExistingStatus');
+const cacheResetProspectsBtn = document.getElementById('cacheResetProspectsBtn');
+const cacheResetProspectsStatus = document.getElementById('cacheResetProspectsStatus');
 const cacheStatus = document.getElementById('cacheStatus');
 const cacheStats = document.getElementById('cacheStats');
 const usersBody = document.getElementById('usersBody');
@@ -822,6 +824,39 @@ cacheResetExistingBtn.addEventListener('click', async () => {
     cacheResetExistingStatus.className = 'status err';
   } finally {
     cacheResetExistingBtn.disabled = false;
+  }
+});
+
+// Spiegelbeeld van de knop hierboven: enkel de prospectrecords wissen. Nodig
+// sinds prospect_signals ook een concurrentnaam vastlegt — zonder hercachering
+// blijft dat veld leeg voor alles wat al in de KV zit.
+cacheResetProspectsBtn.addEventListener('click', async () => {
+  if (!confirm('Alle classificaties van PROSPECTS wissen? Klantclassificaties blijven behouden. Je moet daarna elk maandbestand één keer opnieuw opladen; enkel de prospectopmerkingen worden dan opnieuw geanalyseerd (raming: ongeveer 3 tot 4 euro in totaal). Doorgaan?')) {
+    return;
+  }
+  cacheResetProspectsBtn.disabled = true;
+  cacheResetProspectsStatus.textContent = 'Bezig met wissen...';
+  cacheResetProspectsStatus.className = 'status';
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'cache_reset_prospects' });
+    if (status === 401 || status === 403) {
+      showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+      return;
+    }
+    if (!ok) {
+      cacheResetProspectsStatus.textContent = (data && data.error) || 'Wissen mislukt.';
+      cacheResetProspectsStatus.className = 'status err';
+    } else {
+      cacheResetProspectsStatus.textContent =
+        `${data.verwijderd} prospect-record(s) gewist, ${data.behouden} klant-classificatie(s) behouden. ` +
+        'Laad nu elk maandbestand één keer opnieuw op.';
+      cacheResetProspectsStatus.className = 'status';
+    }
+  } catch (err) {
+    cacheResetProspectsStatus.textContent = 'Wissen mislukt: ' + err.message;
+    cacheResetProspectsStatus.className = 'status err';
+  } finally {
+    cacheResetProspectsBtn.disabled = false;
   }
 });
 
@@ -2193,7 +2228,17 @@ function buildGlobalOverview(agg, aiCategories) {
   const allWishes = [];
   const allPositive = [];
   const allBarriers = [];
-  const competitorCustomers = new Map(); // concurrent-naam -> Set(klanten)
+  // concurrent-naam -> { klanten, prospects, categorieen }. De splitsing is
+  // niet cosmetisch: bij een prospect gaat het gesprek per definitie over wie
+  // het vandaag levert, dus daar vallen de meeste merknamen. Ze samen in één
+  // teller gooien zou verbergen dat een merk vooral bij nog-niet-klanten leeft.
+  const competitorCustomers = new Map();
+  const concurrentBucket = (naam) => {
+    if (!competitorCustomers.has(naam)) {
+      competitorCustomers.set(naam, { klanten: new Set(), prospects: new Set(), categorieen: new Set() });
+    }
+    return competitorCustomers.get(naam);
+  };
   let totalPotential = 0;
   let totalProspects = 0;
 
@@ -2312,9 +2357,9 @@ function buildGlobalOverview(agg, aiCategories) {
       if (t.competitor) {
         const comp = t.competitor.trim();
         if (comp) {
-          if (!competitorCustomers.has(comp)) competitorCustomers.set(comp, { klanten: new Set(), categorieen: new Set() });
-          if (t.customer) competitorCustomers.get(comp).klanten.add(t.customer);
-          competitorCustomers.get(comp).categorieen.add(label);
+          const bucketComp = concurrentBucket(comp);
+          if (t.customer) bucketComp.klanten.add(t.customer);
+          bucketComp.categorieen.add(label);
         }
       }
     }
@@ -2358,6 +2403,14 @@ function buildGlobalOverview(agg, aiCategories) {
     // Drempels komen nu uit de vaste classificatie per prospect-opmerking (die
     // in de KV zit), niet meer uit een verhalend AI-veld — zo werkt dit blok
     // ook in de weergave uit de cache.
+    for (const s of (stats.prospecting.signals || [])) {
+      const comp = (s && s.competitor || '').trim();
+      if (!comp) continue;
+      const bucketComp = concurrentBucket(comp);
+      if (s.customer) bucketComp.prospects.add(s.customer);
+      bucketComp.categorieen.add(label);
+    }
+
     const drempelKlanten = new Map();
     for (const s of (stats.prospecting.signals || [])) {
       if (!s || !s.barrier || s.barrier === 'geen') continue;
@@ -2405,7 +2458,13 @@ function buildGlobalOverview(agg, aiCategories) {
   allBarriers.sort(byCountDesc);
 
   const topCompetitors = [...competitorCustomers.entries()]
-    .map(([name, v]) => ({ name, count: v.klanten.size, categorieen: [...v.categorieen] }))
+    .map(([name, v]) => ({
+      name,
+      count: v.klanten.size + v.prospects.size,
+      klantCount: v.klanten.size,
+      prospectCount: v.prospects.size,
+      categorieen: [...v.categorieen],
+    }))
     .sort(byCountDesc)
     .slice(0, 8);
 
@@ -2585,12 +2644,13 @@ function renderGlobalSection(overview) {
     </div>
     <div class="card">
       <h2 class="part-title">Concurrentiepositie</h2>
-      <p class="part-sub">Concurrenten die bestaande klanten bij naam noemen, met de productcategorieën waarin dat gebeurt — zo zie je meteen waar iemand wél en niet tegenover Winsol staat. Het getal is het aantal klanten dat de naam vermeldt.</p>
+      <p class="part-sub">Concurrenten die bij naam genoemd worden, met de productcategorieën waarin dat gebeurt. Het getal rechts is het totaal aantal firma's dat de naam vermeldt, met daarnaast de opsplitsing tussen bestaande klanten en prospects — bij een prospect gaat het gesprek per definitie over wie het vandaag levert, dus daar vallen doorgaans de meeste namen.</p>
       ${overview.topCompetitors && overview.topCompetitors.length
         ? overview.topCompetitors.map((c) => `
           <div class="ranked-row">
             <span class="ranked-text">${escapeHtml(c.name)}</span>
             <span class="ranked-cat">${escapeHtml((c.categorieen || []).join(' · ') || '—')}</span>
+            <span class="comp-split">${c.klantCount} klant${c.klantCount === 1 ? '' : 'en'} · ${c.prospectCount} prospect${c.prospectCount === 1 ? '' : 's'}</span>
             <span class="count-badge">${c.count}</span>
           </div>`).join('')
         : '<p class="narrative">Geen concurrenten bij naam vermeld.</p>'}

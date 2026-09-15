@@ -198,8 +198,14 @@ const ANALYSIS_TOOL = {
                   description: 'De drempel die uit de opmerking blijkt; "geen" als er geen drempel vermeld wordt.',
                 },
                 detail: { type: 'string', description: 'Max. 1 korte zin, enkel als interest of barrier iets concreets zegt. Anders leeg laten.' },
+                // Bij een prospect gaat het gesprek per definitie over wie het
+                // vandaag levert, dus daar vallen de meeste merknamen. Zonder
+                // dit veld verdween die naam: gemeten over jan-jun stond 41 van
+                // de 56 Renson-vermeldingen en 35 van de 43 Wilms-vermeldingen
+                // in een prospectbezoek, en dus buiten het concurrentieblok.
+                competitor: { type: 'string', description: 'De concurrent/leverancier die in deze opmerking bij naam genoemd wordt in verband met deze productcategorie (bv. "Renson", "Brustor", "Wilms"). Leeg laten als er geen naam valt. Nooit zelf een naam verzinnen of afleiden.' },
               },
-              required: ['id', 'interest', 'barrier', 'detail'],
+              required: ['id', 'interest', 'barrier', 'detail', 'competitor'],
             },
             description: 'VERPLICHT en UITPUTTEND: exact één entry per genummerd prospect-id uit "PROSPECTS" (in dezelfde volgorde, geen enkele overslaan). Dit is het enige veld dat je voor prospecting invult.',
           },
@@ -348,6 +354,9 @@ export default {
     }
     if (body.mode === 'cache_reset_existing') {
       return handleCacheResetExisting(env);
+    }
+    if (body.mode === 'cache_reset_prospects') {
+      return handleCacheResetProspects(env);
     }
 
     if (!env.ANTHROPIC_API_KEY) {
@@ -571,6 +580,7 @@ export default {
           interest: sig.interest,
           barrier: sig.barrier,
           detail: sig.detail || '',
+          competitor: (sig.competitor || '').trim(),
           kind: 'prospect',
           storedAt: new Date().toISOString(),
         };
@@ -700,7 +710,7 @@ function buildStaticInstructions() {
     'BELANGRIJK: verzin geen tag of "detail" die niet gedragen wordt door de tekst van de opmerking zelf. Geef nooit de klantnaam mee — het id volstaat, de tool vult de naam zelf aan. Gebruik nooit een domein/onderwerp buiten de vaste lijst hierboven.',
     '',
     '--- PROSPECTS: prospect_signals ---',
-    'Geef voor "prospecting" enkel de lijst "prospect_signals" terug: exact één entry per genummerd prospect-id bij "PROSPECTS" (elk id begint met "P", bv. "P1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Kies per id een vaste waarde voor "interest" en "barrier"; "detail" blijft leeg als er niets concreets te melden valt. Verzin geen interesse of drempel die niet uit de tekst van de opmerking zelf blijkt. Gaat een opmerking niet of nauwelijks over deze categorie, geef dan "geen" voor beide en laat "detail" leeg — een id weglaten is nooit correct.',
+    'Geef voor "prospecting" enkel de lijst "prospect_signals" terug: exact één entry per genummerd prospect-id bij "PROSPECTS" (elk id begint met "P", bv. "P1"), in dezelfde volgorde, zonder er één over te slaan en zonder ids te verzinnen. Kies per id een vaste waarde voor "interest" en "barrier"; "detail" blijft leeg als er niets concreets te melden valt. Verzin geen interesse of drempel die niet uit de tekst van de opmerking zelf blijkt. Gaat een opmerking niet of nauwelijks over deze categorie, geef dan "geen" voor beide en laat "detail" leeg — een id weglaten is nooit correct. Noemt de opmerking een concurrent of huidige leverancier bij naam in verband met deze categorie, vul die dan in bij "competitor" (enkel de naam, zoals ze in de tekst staat); valt er geen naam, laat het veld leeg en verzin er nooit een.',
   ].join('\n');
 }
 
@@ -945,6 +955,28 @@ async function handleAdminUpsertUsers(body, env) {
 // De selectie gebeurt op metadata, zonder de records te lezen: prospect-records
 // zijn pas ingevoerd nádat het veld "kind" bestond, dus alles zonder dat veld
 // is per definitie een klantrecord.
+// Spiegelbeeld van handleCacheResetExisting: wist enkel de prospectrecords en
+// laat de klantclassificaties staan. Nodig sinds prospect_signals een
+// "competitor"-veld heeft: de historiek moet één keer opnieuw door de AI om dat
+// veld in te vullen, zonder de (duurdere) klantenzijde mee te hercacheren.
+async function handleCacheResetProspects(env) {
+  let cursor;
+  let verwijderd = 0;
+  let behouden = 0;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    const teWissen = [];
+    for (const k of page.keys) {
+      if ((k.metadata || {}).kind === 'prospect') teWissen.push(k.name);
+      else behouden++;
+    }
+    const settled = await Promise.allSettled(teWissen.map((n) => env.FEEDBACKLOOP_KV.delete(n)));
+    verwijderd += settled.filter((s) => s.status === 'fulfilled').length;
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return jsonResponse({ verwijderd, behouden });
+}
+
 async function handleCacheResetExisting(env) {
   let cursor;
   let verwijderd = 0;
@@ -1265,7 +1297,7 @@ async function handleCachedResults(body, env) {
 
     if (isProspect) {
       bucket.prospects.customers.push({ name: rec.klant, remark: rec.remark, rep: rec.rep, date: rec.date, type: rec.type, status: rec.status });
-      bucket.prospects.signals.push({ customer: rec.klant, interest: rec.interest, barrier: rec.barrier, detail: rec.detail || '' });
+      bucket.prospects.signals.push({ customer: rec.klant, interest: rec.interest, barrier: rec.barrier, detail: rec.detail || '', competitor: rec.competitor || '' });
       bucket.prospects.potentialSum += Number(rec.potential) || 0;
       continue;
     }

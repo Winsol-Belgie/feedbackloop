@@ -85,6 +85,19 @@ h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
 .theme-details .customer-list .topic-detail-list{margin:4px 0 2px;}
 .ranked-details .ranked-cat{align-self:flex-start;}
 .ranked-details summary .ranked-text{color:var(--ink);}
+/* Twee lagen op het globaal tab. De kruiscategorie-top is de hoofdlijn: een
+   zacht gevuld blok met de gele merkaccent aan de linkerkant (geel als vlak,
+   nooit als tekst). De uitsplitsing per productcategorie is de tweede laag en
+   blijft een rustige lijst op wit, ingeleid door een ingetogen scheidingskop.
+   Zo zie je meteen wat de hoofdboodschap is en wat de detaillering. */
+.top-block{background:var(--paper);border-left:3px solid var(--accent);border-radius:10px;padding:2px 14px;margin:0 0 6px;}
+.top-block .theme-details{border-bottom-color:#dde1e1;}
+.top-block .theme-details:last-child{border-bottom:none;}
+.top-block .ranked-row{border-bottom-color:#dde1e1;}
+.top-block .ranked-row:last-child{border-bottom:none;}
+.top-block .narrative{margin:10px 0;}
+.top-block .customer-list div{border-top-color:#d6dbdb;}
+h2.part-title.section-split{margin:26px 0 10px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-faint);}
 .sentiment-bar{display:inline-flex;align-items:stretch;height:9px;width:56px;border-radius:5px;overflow:hidden;gap:1px;background:var(--line);vertical-align:middle;}
 .sentiment-bar .seg{flex:1 1 0;min-width:2px;}
 .sentiment-bar .seg-negative{background:var(--bad);}
@@ -391,6 +404,6 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609142340"></script>
+<script src="app.js?v=202609150010"></script>
 </body>
 </html>

@@ -2497,8 +2497,8 @@ function renderGlobalSection(overview) {
   // detailzinnen als de blokken per categorie hieronder. Rijen zonder klanten
   // achter zich (de prospect-drempels) blijven een gewone regel.
   const rankedList = (items, badgeClass, badgeText, emptyText) => {
-    if (!items.length) return `<p class="narrative">${emptyText}</p>`;
-    return items.map((it) => {
+    if (!items.length) return `<div class="top-block"><p class="narrative">${emptyText}</p></div>`;
+    const rijen = items.map((it) => {
       const klantDetails = it.klantDetails
         || (it.klanten || []).map((naam) => ({ naam, details: [] }));
       const badges = `<span class="theme-badges"><span class="pill ${badgeClass}">${badgeText}</span> <span class="count-badge">${it.count}</span></span>`;
@@ -2521,6 +2521,7 @@ function renderGlobalSection(overview) {
         ${klantLijstHtml(klantDetails, it.cat, 'existing')}
       </details>`;
     }).join('');
+    return `<div class="top-block">${rijen}</div>`;
   };
 
   // Per categorie de top 3, openklapbaar met per klant het concrete
@@ -2553,7 +2554,7 @@ function renderGlobalSection(overview) {
       <h2 class="part-title">Sterke punten</h2>
       <p class="part-sub">De positieve signalen die door minstens drie verschillende klanten gedeeld worden, daarna per categorie de top drie. Gerangschikt op het aantal unieke klanten dat het onderwerp positief vermeldt. Klik een onderwerp open voor de klanten en hun bezoekrapport.</p>
       ${rankedList(overview.topPositive, 'positive', 'positief', overview.maxPositive ? dunneLijstTekst(overview.maxPositive, 'positieve signalen') : 'Geen uitgesproken positieve signalen.')}
-      <h2 class="part-title" style="margin-top:18px;">Per productcategorie</h2>
+      <h2 class="part-title section-split">Per productcategorie</h2>
       ${perCategorieBlok(overview.positiefPerCategorie, 'positive', 'positief', 'Geen positieve signalen per categorie.')}
     </div>
     <div class="card">
@@ -2563,9 +2564,9 @@ function renderGlobalSection(overview) {
       ${rankedList(overview.topIssues, 'issue', 'probleem', overview.maxIssues ? dunneLijstTekst(overview.maxIssues, 'problemen') : 'Geen technische/logistieke/service-meldingen gerapporteerd.')}
       <h3 class="part-subtitle">Meest gevraagde wensen</h3>
       ${rankedList(overview.topWishes, 'request', 'wens', overview.maxWishes ? dunneLijstTekst(overview.maxWishes, 'wensen') : 'Geen gewenste features gerapporteerd.')}
-      <h2 class="part-title" style="margin-top:18px;">Problemen per productcategorie</h2>
+      <h2 class="part-title section-split">Problemen per productcategorie</h2>
       ${perCategorieBlok(overview.problemenPerCategorie, 'issue', 'probleem', 'Geen problemen per categorie.')}
-      <h2 class="part-title" style="margin-top:18px;">Wensen per productcategorie</h2>
+      <h2 class="part-title section-split">Wensen per productcategorie</h2>
       ${perCategorieBlok(overview.wensenPerCategorie, 'request', 'wens', 'Geen wensen per categorie.')}
     </div>
     <div class="card">

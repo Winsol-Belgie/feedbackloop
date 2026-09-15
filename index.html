@@ -86,6 +86,18 @@ h2.part-title{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 4px;}
 .ranked-details .ranked-cat{align-self:flex-start;}
 .ranked-details summary .ranked-text{color:var(--ink);}
 .comp-split{flex-shrink:0;font-size:11.5px;color:var(--ink-faint);white-space:nowrap;}
+/* Zoeken */
+.zoek-treffer .ranked-cat{align-self:flex-start;}
+.zoek-meta{color:var(--ink-faint);font-size:11.5px;margin-left:6px;white-space:nowrap;}
+.zoek-body{margin:8px 0 2px 16px;}
+.zoek-fragment{margin:0;font-size:12.5px;line-height:1.6;color:var(--ink-soft);}
+.zoek-volledig{margin-top:8px;}
+.zoek-volledig summary{cursor:pointer;font-size:11.5px;color:var(--info);list-style:none;}
+.zoek-volledig summary::-webkit-details-marker{display:none;}
+.zoek-volledig summary::before{content:'\25B8  ';color:var(--ink-faint);}
+.zoek-volledig[open] summary::before{content:'\25BE  ';}
+.zoek-remark{margin-top:6px;padding:10px 12px;background:var(--paper);border-radius:10px;font-size:12.5px;line-height:1.6;white-space:pre-wrap;max-height:340px;overflow:auto;}
+mark{background:var(--accent);color:var(--accent-ink);padding:0 2px;border-radius:3px;}
 /* Twee lagen op het globaal tab. De kruiscategorie-top is de hoofdlijn: een
    zacht gevuld blok met de gele merkaccent aan de linkerkant (geel als vlak,
    nooit als tekst). De uitsplitsing per productcategorie is de tweede laag en
@@ -379,6 +391,21 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
     </div>
   </div>
 
+  <div class="card" id="synCard" hidden>
+    <h2 class="part-title">Zoektermen beheren</h2>
+    <p class="part-sub">De zoektab gebruikt een lijst met producten en thema's, elk met hun schrijfwijzen en Franse termen — zo vindt "Levertijden" ook "délai" en "doorlooptijd". Er zit een ingebouwde lijst in de tool; upload hier een Excel om die te vervangen. Verwachte kolommen: GROEP (korte sleutel), LABEL (wat de gebruiker ziet), SOORT (product of thema) en TERMEN (zoekwoorden, gescheiden door komma's). Eén rij per groep.</p>
+    <div class="dropzone" id="synDropzone">
+      <p><strong>Sleep het zoektermen-Excel hierheen</strong> of klik om te bladeren</p>
+      <p class="fname" id="synFname">Geen bestand gekozen</p>
+      <input type="file" id="synFileInput" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="row">
+      <button class="btn" id="synUpdateBtn" disabled>Zoektermen bijwerken</button>
+      <button class="btn secondary" id="synExportBtn" type="button">Huidige lijst downloaden</button>
+      <span class="status" id="synStatus"></span>
+    </div>
+  </div>
+
   <div class="card" id="cacheCard" hidden>
     <h2 class="part-title">Cache beheren</h2>
     <p class="part-sub">De AI-classificatie per opmerking wordt bij elke analyse bewaard in de cache (Workers KV), zodat een latere fase filters kan hergebruiken zonder alles opnieuw aan de AI te moeten voorleggen. Gebruik onderstaande knop enkel om de volledige cache leeg te maken (bv. bij twijfel over verouderde data) — gebruikersaccounts blijven behouden.</p>
@@ -407,6 +434,6 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202609150330"></script>
+<script src="app.js?v=202609150500"></script>
 </body>
 </html>

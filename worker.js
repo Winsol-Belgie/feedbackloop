@@ -323,6 +323,13 @@ export default {
     if (body.mode === 'cached_results') {
       return handleCachedResults(body, env);
     }
+    if (body.mode === 'search') {
+      return handleSearch(body, env);
+    }
+    if (body.mode === 'synonyms_get') {
+      const lijst = await env.FEEDBACKLOOP_KV.get(SYNONYMS_KEY, 'json');
+      return jsonResponse({ groepen: Array.isArray(lijst) ? lijst : null });
+    }
 
     // Uploaden/analyseren is enkel voor admins.
     if (session.role !== 'admin') {
@@ -331,6 +338,26 @@ export default {
 
     // Users beheren (Fase 2) is ook admin-only maar heeft geen AI-aanroep
     // nodig — dus vóór de ANTHROPIC_API_KEY-check, net als global_summary.
+    if (body.mode === 'synonyms_put') {
+      const groepen = Array.isArray(body.groepen) ? body.groepen : null;
+      if (!groepen || !groepen.length) {
+        return jsonResponse({ error: 'Geen bruikbare groepen ontvangen.' }, 400);
+      }
+      const opgekuist = groepen
+        .map((g) => ({
+          slug: String(g.slug || '').trim().toLowerCase(),
+          label: String(g.label || '').trim(),
+          soort: String(g.soort || '').trim().toLowerCase() === 'thema' ? 'thema' : 'product',
+          termen: (Array.isArray(g.termen) ? g.termen : []).map((t) => String(t || '').trim()).filter(Boolean),
+        }))
+        .filter((g) => g.slug && g.label && g.termen.length);
+      if (!opgekuist.length) {
+        return jsonResponse({ error: 'Elke rij heeft minstens een groep, een label en een term nodig.' }, 400);
+      }
+      await env.FEEDBACKLOOP_KV.put(SYNONYMS_KEY, JSON.stringify(opgekuist));
+      return jsonResponse({ bewaard: opgekuist.length });
+    }
+
     if (body.mode === 'admin_upsert_users') {
       return handleAdminUpsertUsers(body, env);
     }
@@ -1384,6 +1411,147 @@ async function handleCachedResults(body, env) {
     matched: kept,
     nextCursor,
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// ZOEKEN (Fase 6)
+//
+// Bewust server-side en niet in de browser. Vandaag past de hele BE-cache nog
+// makkelijk in het geheugen van de client, maar met FR, Export en 2025 erbij
+// gaat dat richting duizenden records van enkele MB — per keer dat iemand het
+// tabblad opent. Hier filteren we eerst op de metadata van de KV-sleutels
+// (regio, rep, klant, datum, soort, categorie), wat géén record-reads kost, en
+// lezen we enkel wat overblijft. Zoeken binnen België raakt de Franse records
+// dus nooit aan.
+//
+// Een Worker-verzoek mag ongeveer 1000 subrequests doen (elke KV-get telt mee),
+// vandaar de leeslimiet per pagina en de cursor: de client loopt de pagina's af
+// zoals bij de cache-weergave.
+const SYNONYMS_KEY = 'config:synonyms';
+const SEARCH_MAX_READS = 700;
+
+function zoekNormaliseer(tekst) {
+  return (tekst || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+// Woordgrens zonder \b: termen als "z!p" en "so!" eindigen op een leesteken,
+// waar \b net verkeerd om valt. Accenten zijn al weggenormaliseerd, dus
+// "delai" vindt ook "délai". Geen automatische woordstammen: "origin" zou dan
+// ook "origineel" vinden, en dat maakt een zoekfunctie onbetrouwbaar.
+function bouwTermRegex(termen) {
+  const delen = (termen || [])
+    .map((t) => zoekNormaliseer(t).trim())
+    .filter(Boolean)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
+  if (!delen.length) return null;
+  delen.sort((a, b) => b.length - a.length);
+  try {
+    return new RegExp(`(?<![\\p{L}\\p{N}])(?:${delen.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  } catch (err) {
+    return null;
+  }
+}
+
+function maakFragment(tekst, index, lengte) {
+  const start = Math.max(0, index - 130);
+  const eind = Math.min(tekst.length, index + lengte + 130);
+  return (start > 0 ? '…' : '') + tekst.slice(start, eind).replace(/\s+/g, ' ').trim() + (eind < tekst.length ? '…' : '');
+}
+
+async function handleSearch(body, env) {
+  const regex = bouwTermRegex(body.terms);
+  const topicFilter = String(body.topic || '').trim();
+  if (!regex && !topicFilter) {
+    return jsonResponse({ error: 'Geef een zoekterm of kies een onderwerp.' }, 400);
+  }
+
+  const regioFilter = (body.regio || '').trim();
+  const repFilter = (body.rep || '').trim();
+  const klantFilter = (body.klant || '').trim();
+  const kindFilter = (body.kind || '').trim();
+  const catFilter = (body.categorie || '').trim();
+  const van = (body.dateFrom || '').trim();
+  const tot = (body.dateTo || '').trim();
+  const inPeriode = (iso) => (!van || (iso && iso >= van)) && (!tot || (iso && iso <= tot));
+
+  let cursor = body.cursor || undefined;
+  let gelezen = 0;
+  let bekeken = 0;
+  const treffers = [];
+  const gezien = new Set();
+  let klaar = false;
+
+  while (gelezen < SEARCH_MAX_READS) {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'remark:', cursor });
+    const kandidaten = [];
+    for (const k of page.keys) {
+      bekeken++;
+      const m = k.metadata || {};
+      if (regioFilter && m.regio !== regioFilter) continue;
+      if (repFilter && m.rep !== repFilter) continue;
+      if (klantFilter && m.klant !== klantFilter) continue;
+      if (catFilter && m.category !== catFilter) continue;
+      if (kindFilter === 'prospect' && m.kind !== 'prospect') continue;
+      if (kindFilter === 'klant' && m.kind === 'prospect') continue;
+      const delen = k.name.split(':');
+      const src = m.sourceFile || delen[1] || '';
+      const uitNaam = src.match(/_(\d{2})-(\d{4})\./);
+      const iso = m.date || (uitNaam ? `${uitNaam[2]}-${uitNaam[1]}-01` : '');
+      if ((van || tot) && !inPeriode(iso)) continue;
+      // Dezelfde opmerking staat één keer per productcategorie in de KV. Voor
+      // een zoekresultaat wil je het bezoekverslag één keer zien, met de
+      // categorieën waarin het geklasseerd werd — niet zeven keer hetzelfde.
+      const bezoekId = `${src}|${delen[3] || ''}`;
+      if (gezien.has(bezoekId)) continue;
+      gezien.add(bezoekId);
+      kandidaten.push({ naam: k.name, bezoekId });
+      if (kandidaten.length + gelezen >= SEARCH_MAX_READS) break;
+    }
+
+    if (kandidaten.length) {
+      const records = await Promise.all(kandidaten.map((c) => env.FEEDBACKLOOP_KV.get(c.naam, 'json')));
+      gelezen += kandidaten.length;
+      records.forEach((rec, i) => {
+        if (!rec) return;
+        const tekst = rec.remark || '';
+        let fragment = '';
+        if (regex) {
+          regex.lastIndex = 0;
+          const m = regex.exec(zoekNormaliseer(tekst));
+          if (!m) return;
+          fragment = maakFragment(tekst, m.index, m[0].length);
+        }
+        if (topicFilter) {
+          const heeft = (rec.tags || []).some((t) => `${t.domain}|${t.topic}` === topicFilter);
+          if (!heeft) return;
+          if (!fragment) fragment = maakFragment(tekst, 0, 0);
+        }
+        treffers.push({
+          klant: rec.klant || '',
+          rep: rec.rep || '',
+          regio: rec.regio || '',
+          datum: rec.date || '',
+          datumIso: isoVanRecord(rec),
+          sourceFile: rec.sourceFile || '',
+          categorie: rec.category || '',
+          kind: rec.kind === 'prospect' ? 'prospect' : 'klant',
+          sentiment: rec.sentiment || '',
+          interest: rec.interest || '',
+          barrier: rec.barrier || '',
+          competitor: rec.competitor || '',
+          fragment,
+          remark: tekst,
+          tags: (rec.tags || []).map((t) => `${t.domain}|${t.topic}`),
+        });
+      });
+    }
+
+    if (page.list_complete) { cursor = null; klaar = true; break; }
+    cursor = page.cursor;
+  }
+
+  return jsonResponse({ treffers, gelezen, bekeken, nextCursor: klaar ? null : cursor, klaar });
 }
 
 function corsHeaders() {

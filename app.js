@@ -453,6 +453,9 @@ function showApp(username, role) {
   topbarUser.textContent = username;
   topbarRole.textContent = role === 'admin' ? 'admin' : 'user';
   const isAdmin = role === 'admin';
+  // Synoniemenlijst ophalen (valt terug op de ingebouwde lijst als er nog geen
+  // eigen lijst opgeladen is). Eén KV-read, dus dat mag bij het aanmelden.
+  laadZoekGroepen();
   // De ondertitel spreekt de rol aan die ze leest: een user laadt niets op, dus
   // "upload de CRM-export" is voor hem enkel ruis. Hij krijgt in twee regels
   // waar de tool voor dient en wat hij ermee kan.
@@ -469,6 +472,7 @@ function showApp(username, role) {
   uploadCard.hidden = !isAdmin;
   filterCard.hidden = true;
   usersCard.hidden = !isAdmin;
+  if (synCard) synCard.hidden = !isAdmin;
   cacheCard.hidden = !isAdmin;
   userPlaceholderCard.hidden = true;
   userViewCard.hidden = true;
@@ -2080,6 +2084,390 @@ function activateTab(tabEl, sectionId) {
   document.getElementById(sectionId).classList.add('active');
 }
 
+
+// ---------------------------------------------------------------------------
+// ZOEKEN (Fase 6) — standaard synoniemenlijst
+//
+// Niet verzonnen maar gehaald uit de 863 opmerkingen van de BE-export
+// jan-jun 2026. Dat leverde spellingen op die je anders mist: "lumisolar"
+// komt vaker voor dan "lumisol" (15 tegen 7), idem voor "linasolar".
+// Termen matchen op woordgrens en zonder accenten ("delai" vindt "délai").
+// Bewust géén automatische woordstammen: "origin" zou dan ook "origineel"
+// vinden. Vandaar expliciete lijstjes — die de admin kan vervangen met een
+// Excel (zie de kaart "Zoektermen beheren").
+const ZOEK_GROEPEN_STANDAARD = [
+  { slug: 'zip', label: 'Z!P', soort: 'product', termen: ['z!p', 'zip', 'zipscreen', 'zip screen', 'zip cube', 'zip systeem', 'zip-systeem'] },
+  { slug: 'fusion', label: 'Fusion', soort: 'product', termen: ['fusion', 'fusions'] },
+  { slug: 'origin', label: 'Origin', soort: 'product', termen: ['origin', 'origins', 'pergola origin'] },
+  { slug: 'solarfix', label: 'Solarfix / Solfix', soort: 'product', termen: ['solarfix', 'solarfixen', 'solfix'] },
+  { slug: 'lumisol', label: 'Lumisol / Lumisolar', soort: 'product', termen: ['lumisol', 'lumisolar'] },
+  { slug: 'linasol', label: 'Linasol / Linasolar', soort: 'product', termen: ['linasol', 'linasols', 'linasolar'] },
+  { slug: 'squaro', label: 'Squaro', soort: 'product', termen: ['squaro'] },
+  { slug: 'so', label: 'SO! / Pergola SO!', soort: 'product', termen: ['so!', 'so!s', 'so!crystal', 'pergola so'] },
+  { slug: 'verandasol', label: 'Verandasol', soort: 'product', termen: ['verandasol', 'verandasols'] },
+  { slug: 'camargue', label: 'Camargue', soort: 'product', termen: ['camargue'] },
+  { slug: 'pergola', label: 'Pergola / terrasoverkapping', soort: 'product', termen: ['pergola', 'pergolas', 'terrasoverkapping', 'terrasoverkappingen'] },
+  { slug: 'screens', label: 'Screens', soort: 'product', termen: ['screen', 'screens', 'screendoek', 'screendoeken'] },
+  { slug: 'rolluiken', label: 'Rolluiken', soort: 'product', termen: ['rolluik', 'rolluiken', 'rolluikblad', 'rolluiklamellen', 'volet', 'volets'] },
+  { slug: 'luifels', label: 'Luifels', soort: 'product', termen: ['luifel', 'luifels', 'luifeldoek', 'store banne'] },
+  { slug: 'poorten', label: 'Poorten', soort: 'product', termen: ['poort', 'poorten', 'garagepoort', 'garagepoorten', 'poortbeslag', 'poortpanelen', 'porte de garage'] },
+  { slug: 'schrijnwerk', label: 'Schrijnwerk / ramen', soort: 'product', termen: ['schrijnwerk', 'schrijnwerker', 'schrijnwerkers', 'ramen en deuren', 'menuiserie', 'menuiseries', 'chassis', 'châssis'] },
+  { slug: 'horren', label: 'Horren / muggenramen', soort: 'product', termen: ['hor', 'horren', 'horkader', 'horkaders', 'muggenraam', 'muggenramen', 'moustiquaire'] },
+  { slug: 'schuifwand', label: 'Glazen schuifwanden', soort: 'product', termen: ['glazen schuifwand', 'glazen schuifwanden', 'schuifwand', 'schuifwanden'] },
+
+  { slug: 'levertijd', label: 'Levertijden', soort: 'thema', termen: ['levertermijn', 'levertermijnen', 'leveringstermijn', 'levertijd', 'levertijden', 'doorlooptijd', 'doorlooptijden', 'leverweek', 'lead time', 'delai', 'délai', 'delais', 'délais', 'livraison'] },
+  { slug: 'klacht', label: 'Klachten & dienst na verkoop', soort: 'thema', termen: ['klacht', 'klachten', 'plainte', 'plaintes', 'sav', 'dienst na verkoop', 'dienst naverkoop', 'naverkoop', 'interventie', 'interventies', 'herstelling', 'herstellingen', 'apres-vente', 'après-vente'] },
+  { slug: 'prijs', label: 'Prijs & korting', soort: 'thema', termen: ['prijs', 'prijzen', 'prijsverschil', 'prijszetting', 'te duur', 'duurder', 'tarief', 'tarieven', 'korting', 'kortingen', 'remise', 'remises', 'prix', 'marge'] },
+  { slug: 'motor', label: 'Motorisatie & domotica', soort: 'thema', termen: ['motor', 'motoren', 'motorprobleem', 'motorproblemen', 'motorvervanging', 'motorvervangingen', 'moteur', 'moteurs', 'somfy', 'casambi', 'afstandsbediening', 'telecommande', 'télécommande', 'domotica'] },
+  { slug: 'kleur', label: 'Kleur & afwerking', soort: 'thema', termen: ['kleur', 'kleuren', 'kleurstaal', 'kleurstalen', 'ral', 'lak', 'lakwerk', 'lakken', 'lakkerij', 'laquage', 'couleur', 'anodic', 'renolit', 'coating'] },
+  { slug: 'levering', label: 'Levering & transport', soort: 'thema', termen: ['levering', 'leveringen', 'geleverd', 'transport', 'expeditie', 'gheeraert', 'beschadigd', 'beschadiging', 'beschadigingen', 'schade'] },
+  { slug: 'wincal', label: 'Wincal & WinsolCom', soort: 'thema', termen: ['wincal', 'winsolcom', 'winsol com', 'configurator'] },
+  { slug: 'leads', label: 'Leads & marketing', soort: 'thema', termen: ['lead', 'leads', 'leadinstroom', 'leadgeneratie', 'leadopvolging', 'brochuredownload', 'brochuredownloads', 'batibouw', 'opendeurdag', 'opendeurdagen', 'opendeurweekend', 'beurs', 'salon'] },
+  { slug: 'plaatsing', label: 'Plaatsing & opmeting', soort: 'thema', termen: ['plaatsing', 'plaatsingen', 'plaatser', 'plaatsers', 'plaatsingsploeg', 'plaatsingsploegen', 'plaatsingsagenda', 'opmeting', 'opmetingen', 'montage', 'pose', 'poseur'] },
+  { slug: 'garantie', label: 'Garantie & creditnota', soort: 'thema', termen: ['garantie', 'garantievoorwaarden', 'waarborg', 'creditnota', 'credit nota', 'note de credit', 'note de crédit'] },
+  { slug: 'overname', label: 'Overname & opvolging', soort: 'thema', termen: ['overname', 'overnemer', 'overlaten', 'over te laten', 'handelsfonds', 'opvolger'] },
+];
+
+let zoekGroepen = ZOEK_GROEPEN_STANDAARD;
+let zoekBezig = false;
+
+// De zoektab gebruikt dezelfde regio/rep/klant/periode als de filterkaart die
+// op dat moment zichtbaar is (admin of user), zodat er geen tweede set filters
+// naast de eerste komt te staan die er anders uitziet maar hetzelfde doet.
+function huidigeFilterWaarden() {
+  const adminZichtbaar = filterCard && !filterCard.hidden;
+  if (adminZichtbaar) {
+    return {
+      regio: filterRegio.value, rep: filterRep.value, klant: filterKlant.value.trim(),
+      dateFrom: filterVan.value, dateTo: filterTot.value,
+    };
+  }
+  return {
+    regio: userFilterRegio ? userFilterRegio.value : '',
+    rep: userFilterRep ? userFilterRep.value : '',
+    klant: userFilterKlant ? userFilterKlant.value.trim() : '',
+    dateFrom: userFilterVan ? userFilterVan.value : '',
+    dateTo: userFilterTot ? userFilterTot.value : '',
+  };
+}
+
+async function laadZoekGroepen() {
+  try {
+    const res = await authRequest({ mode: 'synonyms_get' });
+    if (res.ok && res.data && Array.isArray(res.data.groepen) && res.data.groepen.length) {
+      zoekGroepen = res.data.groepen;
+    }
+  } catch (err) {
+    // Geen ramp: de ingebouwde lijst blijft dan gelden.
+  }
+}
+
+function zoekNormaliseerClient(tekst) {
+  return (tekst || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function markeerTermen(tekst, termen) {
+  const veilig = escapeHtml(tekst);
+  const delen = (termen || []).map((t) => zoekNormaliseerClient(t).trim()).filter(Boolean)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'))
+    .sort((a, b) => b.length - a.length);
+  if (!delen.length) return veilig;
+  let re;
+  try {
+    re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${delen.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  } catch (err) {
+    return veilig;
+  }
+  // Op de ontsnapte tekst werken kan niet (accenten/entiteiten schuiven de
+  // posities), dus we markeren op de genormaliseerde variant en bouwen het
+  // resultaat op uit stukken van de originele tekst.
+  const norm = zoekNormaliseerClient(tekst);
+  let uit = '';
+  let laatste = 0;
+  let m;
+  re.lastIndex = 0;
+  while ((m = re.exec(norm)) !== null) {
+    uit += escapeHtml(tekst.slice(laatste, m.index)) + '<mark>' + escapeHtml(tekst.slice(m.index, m.index + m[0].length)) + '</mark>';
+    laatste = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  uit += escapeHtml(tekst.slice(laatste));
+  return uit;
+}
+
+
+// Bouwt het zoektabblad. Aparte functie i.p.v. één grote innerHTML, omdat de
+// knoppen en velden meteen hun eigen handlers nodig hebben.
+// --- Zoektermen beheren (admin) --------------------------------------------
+const synCard = document.getElementById('synCard');
+const synDropzone = document.getElementById('synDropzone');
+const synFileInput = document.getElementById('synFileInput');
+const synFname = document.getElementById('synFname');
+const synUpdateBtn = document.getElementById('synUpdateBtn');
+const synExportBtn = document.getElementById('synExportBtn');
+const synStatus = document.getElementById('synStatus');
+let parsedSynGroepen = [];
+
+function setSynStatus(txt, err) {
+  synStatus.textContent = txt;
+  synStatus.className = err ? 'status err' : 'status';
+}
+
+if (synDropzone) {
+  synDropzone.addEventListener('click', () => synFileInput.click());
+  synDropzone.addEventListener('dragover', (e) => { e.preventDefault(); synDropzone.classList.add('drag'); });
+  synDropzone.addEventListener('dragleave', () => synDropzone.classList.remove('drag'));
+  synDropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    synDropzone.classList.remove('drag');
+    if (e.dataTransfer.files.length) handleSynFile(e.dataTransfer.files[0]);
+  });
+  synFileInput.addEventListener('change', (e) => {
+    if (e.target.files.length) handleSynFile(e.target.files[0]);
+  });
+}
+
+async function handleSynFile(file) {
+  synFname.textContent = file.name;
+  setSynStatus('Bestand inlezen...');
+  synUpdateBtn.disabled = true;
+  parsedSynGroepen = [];
+  let parsed;
+  try {
+    parsed = await readFileRows(file);
+  } catch (err) {
+    setSynStatus(err.message, true);
+    return;
+  }
+  const groepen = parsed.rows.map((r) => ({
+    slug: String(r['groep'] || '').trim().toLowerCase(),
+    label: String(r['label'] || '').trim(),
+    soort: String(r['soort'] || '').trim().toLowerCase() === 'thema' ? 'thema' : 'product',
+    termen: String(r['termen'] || '').split(/[,;]/).map((t) => t.trim()).filter(Boolean),
+  })).filter((g) => g.slug && g.label && g.termen.length);
+  if (!groepen.length) {
+    setSynStatus('Geen bruikbare rijen gevonden — verwacht kolommen GROEP, LABEL, SOORT en TERMEN.', true);
+    return;
+  }
+  parsedSynGroepen = groepen;
+  const aantalTermen = groepen.reduce((n, g) => n + g.termen.length, 0);
+  setSynStatus(`${groepen.length} groepen met ${aantalTermen} termen ingelezen uit "${parsed.sheetName}". Klik op "Zoektermen bijwerken" om te bevestigen.`);
+  synUpdateBtn.disabled = false;
+}
+
+if (synUpdateBtn) {
+  synUpdateBtn.addEventListener('click', async () => {
+    if (!parsedSynGroepen.length) return;
+    synUpdateBtn.disabled = true;
+    setSynStatus('Bezig met bewaren...');
+    try {
+      const { ok, status, data } = await authRequest({ mode: 'synonyms_put', groepen: parsedSynGroepen });
+      if (status === 401 || status === 403) {
+        showLogin(status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+        return;
+      }
+      if (!ok) {
+        setSynStatus((data && data.error) || 'Bewaren mislukt.', true);
+        synUpdateBtn.disabled = false;
+        return;
+      }
+      zoekGroepen = parsedSynGroepen;
+      setSynStatus(`${data.bewaard} groepen bewaard. De zoektab gebruikt ze vanaf de volgende zoekopdracht.`);
+    } catch (err) {
+      setSynStatus('Bewaren mislukt: ' + err.message, true);
+      synUpdateBtn.disabled = false;
+    }
+  });
+}
+
+// Downloaden van wat er nu geldt, als vertrekpunt om aan te vullen: zo hoeft
+// niemand de ingebouwde lijst over te typen om er één term aan toe te voegen.
+if (synExportBtn) {
+  synExportBtn.addEventListener('click', () => {
+    const rijen = [['GROEP', 'LABEL', 'SOORT', 'TERMEN']].concat(
+      zoekGroepen.map((g) => [g.slug, g.label, g.soort, g.termen.join(', ')])
+    );
+    const csv = rijen.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'feedbackloop_zoektermen.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    setSynStatus(`${zoekGroepen.length} groepen geëxporteerd. Vul aan in Excel en laad het bestand hierboven opnieuw op.`);
+  });
+}
+
+function bouwZoekSectie() {
+  const sectie = document.createElement('div');
+  sectie.className = 'section';
+  sectie.id = 'section-zoeken';
+
+  const groepOpties = ['<option value="">— kies een product of thema —</option>']
+    .concat(
+      ['product', 'thema'].map((soort) => {
+        const items = zoekGroepen.filter((g) => g.soort === soort);
+        if (!items.length) return '';
+        const kop = soort === 'product' ? 'Producten' : 'Thema\'s';
+        return `<optgroup label="${kop}">` +
+          items.map((g) => `<option value="${escapeAttr(g.slug)}">${escapeHtml(g.label)}</option>`).join('') +
+          '</optgroup>';
+      })
+    ).join('');
+
+  const topicOpties = ['<option value="">— alle onderwerpen —</option>']
+    .concat(Object.entries(TAXONOMY).map(([domein, d]) =>
+      `<optgroup label="${escapeAttr(d.label)}">` +
+      Object.entries(d.topics).map(([topic, label]) =>
+        `<option value="${escapeAttr(domein + '|' + topic)}">${escapeHtml(label)}</option>`).join('') +
+      '</optgroup>')).join('');
+
+  sectie.innerHTML = `
+    <div class="card">
+      <h2 class="part-title">Zoeken in de bezoekverslagen</h2>
+      <p class="part-sub">Zoek op een woord (bv. "Z!P" of "Casambi"), op een product of thema uit de lijst — die vindt ook de andere schrijfwijzen en de Franse termen — of op een onderwerp zoals de AI het geklasseerd heeft. De regio, vertegenwoordiger, klant en periode uit de filterkaart bovenaan gelden ook hier, zodat je binnen je selectie zoekt.</p>
+      <div class="filter-row">
+        <label>Zoekterm
+          <input type="text" id="zoekQ" placeholder="bv. Z!P, Casambi, Renson">
+        </label>
+        <label>Product of thema
+          <select id="zoekGroep">${groepOpties}</select>
+        </label>
+        <label>Onderwerp (AI-classificatie)
+          <select id="zoekTopic">${topicOpties}</select>
+        </label>
+        <label>Soort bezoek
+          <select id="zoekKind">
+            <option value="">Klanten en prospects</option>
+            <option value="klant">Enkel bestaande klanten</option>
+            <option value="prospect">Enkel prospects</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button class="btn" id="zoekBtn" type="button">Zoeken</button>
+        <span class="status" id="zoekStatus"></span>
+      </div>
+      <div class="progress-track" id="zoekProgressTrack" hidden><div class="progress-fill" id="zoekProgress"></div></div>
+      <div id="zoekResultaten"></div>
+    </div>`;
+  return sectie;
+}
+
+function zoekTermenVoor(slug, vrijeTekst) {
+  const termen = [];
+  const groep = zoekGroepen.find((g) => g.slug === slug);
+  if (groep) termen.push(...groep.termen);
+  const vrij = (vrijeTekst || '').trim();
+  if (vrij) termen.push(vrij);
+  return termen;
+}
+
+function renderZoekTreffers(treffers, termen) {
+  if (!treffers.length) return '<p class="narrative">Geen resultaten. Probeer een andere term, of ruim de filters bovenaan op.</p>';
+  return treffers.map((t) => {
+    const cat = CATEGORY_LABELS[t.categorie] || t.categorie || '—';
+    const datum = t.datumIso || t.datum || '';
+    const soort = t.kind === 'prospect' ? '<span class="pill neutral">prospect</span>' : '';
+    const sentiment = t.sentiment && t.sentiment !== 'no_opinion'
+      ? `<span class="pill ${t.sentiment === 'negative' ? 'issue' : t.sentiment === 'positive' ? 'positive' : 'neutral'}">${escapeHtml(t.sentiment)}</span>`
+      : '';
+    return `
+      <details class="theme-details zoek-treffer">
+        <summary>
+          <span class="ranked-cat">${escapeHtml(cat)}</span>
+          <span class="ranked-text"><strong>${escapeHtml(t.klant)}</strong> <span class="zoek-meta">${escapeHtml(datum)}${t.rep ? ' · ' + escapeHtml(t.rep) : ''}</span></span>
+          <span class="theme-badges">${soort}${sentiment}</span>
+        </summary>
+        <div class="zoek-body">
+          <p class="zoek-fragment">${markeerTermen(t.fragment || '', termen)}</p>
+          <details class="zoek-volledig"><summary>Volledig bezoekverslag</summary><div class="zoek-remark">${markeerTermen(t.remark || '', termen)}</div></details>
+        </div>
+      </details>`;
+  }).join('');
+}
+
+async function voerZoekopdrachtUit() {
+  if (zoekBezig) return;
+  const qEl = document.getElementById('zoekQ');
+  const groepEl = document.getElementById('zoekGroep');
+  const topicEl = document.getElementById('zoekTopic');
+  const kindEl = document.getElementById('zoekKind');
+  const btn = document.getElementById('zoekBtn');
+  const statusEl = document.getElementById('zoekStatus');
+  const resEl = document.getElementById('zoekResultaten');
+  const track = document.getElementById('zoekProgressTrack');
+  const bar = document.getElementById('zoekProgress');
+  if (!qEl) return;
+
+  const termen = zoekTermenVoor(groepEl.value, qEl.value);
+  const topic = topicEl.value;
+  if (!termen.length && !topic) {
+    statusEl.textContent = 'Geef een zoekterm, of kies een product, thema of onderwerp.';
+    statusEl.className = 'status err';
+    return;
+  }
+
+  zoekBezig = true;
+  btn.disabled = true;
+  statusEl.className = 'status';
+  statusEl.textContent = 'Zoeken...';
+  resEl.innerHTML = '';
+  track.hidden = false;
+  bar.style.width = '5%';
+
+  const f = huidigeFilterWaarden();
+  const alles = [];
+  let cursor = null;
+  let paginas = 0;
+  let bekeken = 0;
+  try {
+    do {
+      const res = await authRequest({
+        mode: 'search', terms: termen, topic,
+        regio: f.regio, rep: f.rep, klant: f.klant,
+        dateFrom: f.dateFrom || '', dateTo: f.dateTo || '',
+        kind: kindEl.value, cursor,
+      });
+      if (res.status === 401 || res.status === 403) {
+        showLogin(res.status === 401 ? 'Sessie verlopen — log opnieuw in.' : 'Geen toegang.');
+        return;
+      }
+      if (!res.ok) throw new Error((res.data && res.data.error) || 'Zoeken mislukt.');
+      alles.push(...(res.data.treffers || []));
+      bekeken += res.data.bekeken || 0;
+      cursor = res.data.nextCursor;
+      paginas++;
+      bar.style.width = Math.min(95, 5 + paginas * 12) + '%';
+      statusEl.textContent = `${alles.length} resultaat/resultaten, ${bekeken} opmerkingen doorzocht...`;
+    } while (cursor && paginas < 25);
+
+    alles.sort((a, b) => (b.datumIso || '').localeCompare(a.datumIso || ''));
+    bar.style.width = '100%';
+    const klantenUniek = new Set(alles.map((t) => t.klant)).size;
+    statusEl.textContent = alles.length
+      ? `${alles.length} resultaat/resultaten bij ${klantenUniek} firma('s), uit ${bekeken} doorzochte opmerkingen.`
+      : `Geen resultaten, uit ${bekeken} doorzochte opmerkingen.`;
+    resEl.innerHTML = renderZoekTreffers(alles, termen);
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.className = 'status err';
+  } finally {
+    zoekBezig = false;
+    btn.disabled = false;
+    setTimeout(() => { track.hidden = true; bar.style.width = '0%'; }, 600);
+  }
+}
+
+function koppelZoekHandlers() {
+  const btn = document.getElementById('zoekBtn');
+  const q = document.getElementById('zoekQ');
+  if (btn) btn.addEventListener('click', voerZoekopdrachtUit);
+  if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') voerZoekopdrachtUit(); });
+}
+
 function renderResults(agg, aiCategories, globalOverview) {
   const tabsEl = document.getElementById('tabs');
   const sectionsEl = document.getElementById('sections');
@@ -2146,6 +2534,16 @@ function renderResults(agg, aiCategories, globalOverview) {
   });
 
   document.getElementById('results').style.display = 'block';
+
+  // Zoeken staat achteraan in dezelfde tabstrip: het is geen productgroep maar
+  // een aparte manier om in dezelfde data te kijken.
+  const zoekTab = document.createElement('div');
+  zoekTab.className = 'tab';
+  zoekTab.textContent = 'Zoeken';
+  zoekTab.onclick = () => activateTab(zoekTab, 'section-zoeken');
+  tabsEl.appendChild(zoekTab);
+  sectionsEl.appendChild(bouwZoekSectie());
+  koppelZoekHandlers();
 }
 
 // escapeHtml (hieronder) gaat via div.textContent/innerHTML — dat escaped

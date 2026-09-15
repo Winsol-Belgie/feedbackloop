@@ -1291,8 +1291,13 @@ filterBtn.addEventListener('click', async () => {
   const aiNote = aiNotes.length ? ` Let op — onvolledig AI-antwoord voor: ${aiNotes.join('; ')}.` : '';
   // AI-verbruik + accountlimiet tonen: zo is meteen zichtbaar of een trage run
   // aan de hoeveelheid werk lag of aan de rate limit van het Anthropic-account.
-  const hergebruikNote = hergebruikt
-    ? ` ${hergebruikt} opmerking(en) stonden al in de cache en kostten niets; ${nieuw} nieuw geanalyseerd.`
+  // Niet enkel tonen wanneer er hergebruik was: net na een cache-reset is
+  // hergebruikt 0 en verdween zo ook het aantal nieuw geanalyseerde
+  // opmerkingen — precies het cijfer dat je dan wil zien.
+  const hergebruikNote = (hergebruikt || nieuw)
+    ? (hergebruikt
+      ? ` ${hergebruikt} opmerking(en) stonden al in de cache en kostten niets; ${nieuw} nieuw geanalyseerd.`
+      : ` ${nieuw} opmerking(en) nieuw geanalyseerd (niets uit de cache).`)
     : '';
   const bijwerkDelen = [];
   if (bezoekenGeregistreerd) bijwerkDelen.push(`${bezoekenGeregistreerd} bezoek(en) geregistreerd`);

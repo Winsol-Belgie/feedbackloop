@@ -2301,16 +2301,12 @@ if (synExportBtn) {
     const rijen = [['GROEP', 'LABEL', 'SOORT', 'TERMEN']].concat(
       zoekGroepen.map((g) => [g.slug, g.label, g.soort, g.termen.join(', ')])
     );
-    const csv = rijen.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'feedbackloop_zoektermen.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
-    setSynStatus(`${zoekGroepen.length} groepen geëxporteerd. Vul aan in Excel en laad het bestand hierboven opnieuw op.`);
+    const ws = XLSX.utils.aoa_to_sheet(rijen);
+    ws['!cols'] = [{ wch: 16 }, { wch: 30 }, { wch: 11 }, { wch: 80 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Zoektermen');
+    XLSX.writeFile(wb, 'Feedbackloop_zoektermen.xlsx');
+    setSynStatus(zoekGroepen.length + ' groepen geexporteerd. Pas aan in Excel en laad het bestand hierboven opnieuw op.');
   });
 }
 
@@ -2366,6 +2362,7 @@ function bouwZoekSectie() {
       </div>
       <div class="row">
         <button class="btn" id="zoekBtn" type="button">Zoeken</button>
+        <button class="btn secondary" id="zoekWisBtn" type="button">Velden wissen</button>
         <span class="status" id="zoekStatus"></span>
       </div>
       <div class="progress-track" id="zoekProgressTrack" hidden><div class="progress-fill" id="zoekProgress"></div></div>
@@ -2465,9 +2462,23 @@ async function voerZoekopdrachtUit() {
     alles.sort((a, b) => (b.datumIso || '').localeCompare(a.datumIso || ''));
     bar.style.width = '100%';
     const klantenUniek = new Set(alles.map((t) => t.klant)).size;
+    // Meerdere criteria werken SAMEN: "Rolluiken" plus onderwerp "Levertermijn"
+    // geeft enkel verslagen die aan allebei voldoen. Zonder dat erbij te zetten
+    // leest een klein resultaat als een fout in plaats van als een smalle vraag.
+    const criteria = [];
+    const vrijeTekst = qEl.value.trim();
+    if (vrijeTekst) criteria.push('"' + vrijeTekst + '"');
+    const gekozenGroep = zoekGroepen.find((g) => g.slug === groepEl.value);
+    if (gekozenGroep) criteria.push(gekozenGroep.label);
+    if (topic) criteria.push('onderwerp ' + topicEl.options[topicEl.selectedIndex].text);
+    if (kindEl.value) criteria.push(kindEl.options[kindEl.selectedIndex].text.toLowerCase());
+    const criteriaTxt = criteria.length > 1
+      ? ' Gezocht op ' + criteria.join(' en ') + ' samen.'
+      : (criteria.length ? ' Gezocht op ' + criteria[0] + '.' : '');
     statusEl.textContent = alles.length
       ? `${alles.length} resultaat/resultaten bij ${klantenUniek} firma('s), uit ${bekeken} doorzochte opmerkingen.`
       : `Geen resultaten, uit ${bekeken} doorzochte opmerkingen.`;
+    statusEl.textContent += criteriaTxt;
     resEl.innerHTML = renderZoekTreffers(alles, termen);
   } catch (err) {
     statusEl.textContent = err.message;
@@ -2484,6 +2495,18 @@ function koppelZoekHandlers() {
   const q = document.getElementById('zoekQ');
   if (btn) btn.addEventListener('click', voerZoekopdrachtUit);
   if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') voerZoekopdrachtUit(); });
+  const wis = document.getElementById('zoekWisBtn');
+  if (wis) wis.addEventListener('click', () => {
+    ['zoekQ', 'zoekGroep', 'zoekTopic', 'zoekKind'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    const st = document.getElementById('zoekStatus');
+    if (st) { st.textContent = ''; st.className = 'status'; }
+    const res = document.getElementById('zoekResultaten');
+    if (res) res.innerHTML = '';
+    if (q) q.focus();
+  });
 }
 
 function renderResults(agg, aiCategories, globalOverview) {

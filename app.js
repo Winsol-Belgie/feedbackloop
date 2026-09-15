@@ -2089,8 +2089,10 @@ function activateTab(tabEl, sectionId) {
 // ZOEKEN (Fase 6) — standaard synoniemenlijst
 //
 // Niet verzonnen maar gehaald uit de 863 opmerkingen van de BE-export
-// jan-jun 2026. Dat leverde spellingen op die je anders mist: "lumisolar"
-// komt vaker voor dan "lumisol" (15 tegen 7), idem voor "linasolar".
+// jan-jun 2026. Let op: Lumisol en Lumisolar zijn APARTE producten, net als
+// Linasol/Linasolar en Solfix/Solarfix — ze staan dus elk in een eigen groep.
+// De woordgrens houdt ze uit elkaar: "lumisol" matcht niet in "lumisolar",
+// want daar volgt nog een letter.
 // Termen matchen op woordgrens en zonder accenten ("delai" vindt "délai").
 // Bewust géén automatische woordstammen: "origin" zou dan ook "origineel"
 // vinden. Vandaar expliciete lijstjes — die de admin kan vervangen met een
@@ -2099,9 +2101,12 @@ const ZOEK_GROEPEN_STANDAARD = [
   { slug: 'zip', label: 'Z!P', soort: 'product', termen: ['z!p', 'zip', 'zipscreen', 'zip screen', 'zip cube', 'zip systeem', 'zip-systeem'] },
   { slug: 'fusion', label: 'Fusion', soort: 'product', termen: ['fusion', 'fusions'] },
   { slug: 'origin', label: 'Origin', soort: 'product', termen: ['origin', 'origins', 'pergola origin'] },
-  { slug: 'solarfix', label: 'Solarfix / Solfix', soort: 'product', termen: ['solarfix', 'solarfixen', 'solfix'] },
-  { slug: 'lumisol', label: 'Lumisol / Lumisolar', soort: 'product', termen: ['lumisol', 'lumisolar'] },
-  { slug: 'linasol', label: 'Linasol / Linasolar', soort: 'product', termen: ['linasol', 'linasols', 'linasolar'] },
+  { slug: 'solarfix', label: 'Solarfix', soort: 'product', termen: ['solarfix', 'solarfixen'] },
+  { slug: 'solfix', label: 'Solfix', soort: 'product', termen: ['solfix', 'solfixen'] },
+  { slug: 'lumisol', label: 'Lumisol', soort: 'product', termen: ['lumisol', 'lumisols'] },
+  { slug: 'lumisolar', label: 'Lumisolar', soort: 'product', termen: ['lumisolar', 'lumisolars'] },
+  { slug: 'linasol', label: 'Linasol', soort: 'product', termen: ['linasol', 'linasols'] },
+  { slug: 'linasolar', label: 'Linasolar', soort: 'product', termen: ['linasolar', 'linasolars'] },
   { slug: 'squaro', label: 'Squaro', soort: 'product', termen: ['squaro'] },
   { slug: 'so', label: 'SO! / Pergola SO!', soort: 'product', termen: ['so!', 'so!s', 'so!crystal', 'pergola so'] },
   { slug: 'verandasol', label: 'Verandasol', soort: 'product', termen: ['verandasol', 'verandasols'] },
@@ -2163,7 +2168,16 @@ async function laadZoekGroepen() {
 }
 
 function zoekNormaliseerClient(tekst) {
-  return (tekst || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const bron = tekst || '';
+  let uit = '';
+  for (let i = 0; i < bron.length; i++) {
+    const ch = bron[i];
+    const klein = ch.toLowerCase();
+    const een = klein.length === 1 ? klein : ch;
+    const ontdaan = een.normalize('NFD');
+    uit += ontdaan[0] || een;
+  }
+  return uit;
 }
 
 function markeerTermen(tekst, termen) {

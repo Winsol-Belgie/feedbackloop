@@ -1429,10 +1429,33 @@ async function handleCachedResults(body, env) {
 // vandaar de leeslimiet per pagina en de cursor: de client loopt de pagina's af
 // zoals bij de cache-weergave.
 const SYNONYMS_KEY = 'config:synonyms';
-const SEARCH_MAX_READS = 700;
 
+// Stond eerder enkel als lokale const binnen handleCachedResults; handleSearch
+// riep ze aan en deed de Worker crashen (en een gecrashte Worker stuurt geen
+// CORS-headers mee, wat in de browser als "Failed to fetch" binnenkomt).
+function recordIso(rec) {
+  if (!rec) return '';
+  if (rec.dateIso) return rec.dateIso;
+  const uitNaam = String(rec.sourceFile || '').match(/_(\d{2})-(\d{4})\./);
+  return uitNaam ? `${uitNaam[2]}-${uitNaam[1]}-01` : '';
+}
+const SEARCH_MAX_READS = 400;
+
+// Let op: per teken werken, niet op de hele string. Een gewone NFD-normalisatie
+// verandert de lengte (e met accent wordt e + los accentteken), waardoor de
+// gevonden positie niet meer klopt met de originele tekst en het fragment
+// naast de treffer valt.
 function zoekNormaliseer(tekst) {
-  return (tekst || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const bron = tekst || '';
+  let uit = '';
+  for (let i = 0; i < bron.length; i++) {
+    const ch = bron[i];
+    const klein = ch.toLowerCase();
+    const een = klein.length === 1 ? klein : ch;
+    const ontdaan = een.normalize('NFD');
+    uit += ontdaan[0] || een;
+  }
+  return uit;
 }
 
 // Woordgrens zonder \b: termen als "z!p" en "so!" eindigen op een leesteken,
@@ -1460,6 +1483,14 @@ function maakFragment(tekst, index, lengte) {
 }
 
 async function handleSearch(body, env) {
+  try {
+    return await zoekInCache(body, env);
+  } catch (err) {
+    return jsonResponse({ error: 'Zoeken mislukt: ' + (err && err.message ? err.message : String(err)) }, 500);
+  }
+}
+
+async function zoekInCache(body, env) {
   const regex = bouwTermRegex(body.terms);
   const topicFilter = String(body.topic || '').trim();
   if (!regex && !topicFilter) {
@@ -1532,7 +1563,7 @@ async function handleSearch(body, env) {
           rep: rec.rep || '',
           regio: rec.regio || '',
           datum: rec.date || '',
-          datumIso: isoVanRecord(rec),
+          datumIso: recordIso(rec),
           sourceFile: rec.sourceFile || '',
           categorie: rec.category || '',
           kind: rec.kind === 'prospect' ? 'prospect' : 'klant',

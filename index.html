@@ -218,22 +218,34 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 #uploadBody,#filterBody{margin-top:4px;}
 
 /* --- Login (Fase 1) --- */
-#loginScreen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-.login-card{background:var(--paper-2);border:1px solid var(--line);border-radius:18px;padding:32px 28px;max-width:360px;width:100%;text-align:center;}
-.login-card h1{font-size:20px;margin:0 0 4px;color:var(--ink);}
-.login-card .login-sub{color:var(--ink-faint);font-size:13px;margin:0 0 20px;}
-.login-form{display:flex;flex-direction:column;gap:12px;text-align:left;}
-.login-form input[type=text],.login-form input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:inherit;font-size:14px;background:var(--paper);}
-.login-form input:focus{outline:2px solid var(--accent);outline-offset:1px;}
-.login-pw-wrap{position:relative;}
-.login-pw-wrap input{padding-right:38px !important;}
-.login-pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--ink-faint);font-size:16px;padding:4px;}
-.login-remember{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);cursor:pointer;}
-.login-remember input{margin:0;}
-.login-btn{width:100%;}
-.login-error{color:var(--bad);font-size:13px;min-height:16px;}
-.login-contact{color:var(--ink-faint);font-size:12px;margin-top:4px;}
-.login-contact a{color:var(--info);}
+/* ===== Loginkaart: exact gelijk aan de Presentatievertaler =====
+   Afgeleid van de berekende stijl daar (styles.css + inline overrides samen),
+   niet van één van beide bronnen apart. Alles hangt onder #loginScreen zodat
+   de algemene regels van Feedbackloop (border-box, .btn) er niet tussen komen.
+   Gemeten referentie op 1280x800: kaart 418x454, invoervelden 360x39,
+   knop 360x44, taalkeuze onderaan. */
+#loginScreen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;background:#f7f7f8;}
+#loginScreen .login-card{box-sizing:content-box;background:#fff;border:1px solid #e5e5e9;border-radius:18px;padding:32px 28px;max-width:360px;width:100%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);display:flex;flex-direction:column;align-items:center;gap:0;}
+#loginScreen .login-logo{width:56px;height:56px;margin:0 0 12px;object-fit:contain;}
+#loginScreen .login-card h1{font-size:20px;font-weight:700;margin:0 0 4px;color:#111;}
+#loginScreen .login-sub{color:#6b7280;font-size:13px;margin:0 0 20px;}
+#loginScreen .login-form{display:flex;flex-direction:column;gap:12px;width:100%;text-align:left;}
+#loginScreen .login-form input[type=text],#loginScreen .login-form input[type=password]{width:100%;box-sizing:border-box;border:1px solid #e5e5e9;border-radius:9px;padding:10px 12px;font-family:inherit;font-size:14px;background:#f7f7f8;color:#111;}
+#loginScreen .login-form input:focus{outline:2px solid #FFD500;outline-offset:1px;border-color:#FFD500;}
+#loginScreen .login-pw-wrap{position:relative;display:flex;align-items:center;}
+#loginScreen .login-pw-wrap input{flex:1;padding-right:38px !important;}
+#loginScreen .login-pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#6b7280;font-family:revert;font-size:16px;padding:4px;display:flex;align-items:center;line-height:1;}
+#loginScreen .login-pw-eye:hover{color:#111;background:none;}
+#loginScreen .login-remember{display:flex;align-items:center;gap:8px;font-size:13px;color:#6b7280;cursor:pointer;user-select:none;}
+#loginScreen .login-remember input{margin:0;width:16px;height:16px;cursor:pointer;accent-color:#FFD500;}
+/* font-family:revert = het standaard knoplettertype van de browser. De
+   Presentatievertaler zet geen font-family op knoppen, dus daar staat
+   'Aanmelden' in die standaard (Arial); hier staat elders inherit op button. */
+#loginScreen .login-btn{box-sizing:border-box;width:100%;padding:12px;margin-top:4px;border:1px solid #FFD500;border-radius:8px;background:#FFD500;color:#111;font-family:revert;font-size:16px;font-weight:700;cursor:pointer;}
+#loginScreen .login-btn:hover{background:#ffde33;}
+#loginScreen .login-btn:disabled{opacity:.6;cursor:not-allowed;}
+#loginScreen .login-error{color:#c00;font-size:13px;min-height:16px;}
+#loginScreen .login-lang{justify-content:center;margin-top:18px;}
 #appRoot{display:none;}
 .topbar{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:10px;padding:0 0 16px;font-size:13px;color:var(--ink-faint);}
 .topbar .language-box{margin-right:auto;}
@@ -247,7 +259,7 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 .language-wrapper::after{content:"";position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid var(--ink-faint);}
 .btn-dark{background:#2f3638;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;}
 .btn-dark:hover{background:#23292b;}
-.login-card .login-logo{width:56px;height:56px;margin-bottom:12px;}
+
 #userPlaceholder{color:var(--ink-faint);font-size:14px;}
 </style>
 </head>
@@ -268,8 +280,13 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
         <input type="checkbox" id="loginRemember">
         <span>Blijf aangemeld</span>
       </label>
-      <button class="btn login-btn" id="loginSubmitBtn" type="button">Aanmelden</button>
+      <button class="login-btn" id="loginSubmitBtn" type="button">Aanmelden</button>
       <div class="login-error" id="loginError"></div>
+    </div>
+    <div class="language-box login-lang">
+      <svg class="lang-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm7.93 9h-3.05a15.1 15.1 0 00-1.12-5.18 8.03 8.03 0 014.17 5.18zM12 4c.88 1.14 1.57 2.71 1.97 4.5H10.03C10.43 6.71 11.12 5.14 12 4zm-3.76.82A15.1 15.1 0 006.12 11H3.07a8.03 8.03 0 015.17-6.18zM3.07 13h3.05a15.1 15.1 0 001.12 5.18A8.03 8.03 0 013.07 13zm8.93 7c-.88-1.14-1.57-2.71-1.97-4.5h3.94c-.4 1.79-1.09 3.36-1.97 4.5zm3.76-.82a15.1 15.1 0 001.12-5.18h3.05a8.03 8.03 0 01-4.17 5.18z"/></svg>
+      <!-- Voorlopig enkel Nederlands, net als de taalkeuze in de topbalk. -->
+      <div class="language-wrapper"><select id="uiLangLogin" title="Taal van de interface"><option value="nl">Nederlands</option></select></div>
     </div>
   </div>
 </div>
@@ -464,6 +481,6 @@ h3.part-subtitle{color:var(--ink-soft);font-size:14px;font-weight:700;margin:14p
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=202610111345"></script>
+<script src="app.js?v=202610111420"></script>
 </body>
 </html>

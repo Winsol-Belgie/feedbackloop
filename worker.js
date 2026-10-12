@@ -281,6 +281,11 @@ export default {
     // gelezen). Eerst één échte batch vooruitsturen loste dat ook op, maar
     // kostte ~40s stilstand; deze variant kost er een paar.
     if (body.mode === 'warm_cache') {
+      // Enkel nodig vlak voor een upload, en die is admin-only. Zonder deze
+      // controle kon elke ingelogde gebruiker (een minieme) AI-kost veroorzaken.
+      if (session.role !== 'admin') {
+        return jsonResponse({ error: 'Enkel toegankelijk voor admins.' }, 403);
+      }
       if (!env.ANTHROPIC_API_KEY) return jsonResponse({ error: 'Geen API-sleutel geconfigureerd.' }, 500);
       const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
       try {
@@ -356,6 +361,13 @@ export default {
       }
       await env.FEEDBACKLOOP_KV.put(SYNONYMS_KEY, JSON.stringify(opgekuist));
       return jsonResponse({ bewaard: opgekuist.length });
+    }
+
+    if (body.mode === 'admin_list_users') {
+      return handleAdminListUsers(env);
+    }
+    if (body.mode === 'admin_delete_user') {
+      return handleAdminDeleteUser(body, env, session);
     }
 
     if (body.mode === 'admin_upsert_users') {
@@ -851,6 +863,28 @@ function buildGlobalSummaryPrompt(categories) {
 // dus zelfs met leestoegang tot de KV-inhoud alleen kan een wachtwoord niet
 // teruggerekend worden zonder ook die secret te kennen.
 
+// Na LOGIN_MAX_POGINGEN foute pogingen voor dezelfde gebruikersnaam wordt die
+// LOGIN_BLOKKEER_SECONDEN geblokkeerd. Elke nieuwe foute poging verlengt de
+// blokkering. Geldt ook voor onbestaande gebruikersnamen, zodat je aan de
+// reactie niet kan afleiden welke namen bestaan. KV is "eventually consistent"
+// over de datacenters heen: een aanvaller verspreid over meerdere locaties
+// krijgt mogelijk een paar pogingen extra, maar geen onbeperkte reeks meer.
+// KV-sleutel: loginfail:<gebruikersnaam in kleine letters> -> { count, until }
+const LOGIN_MAX_POGINGEN = 5;
+const LOGIN_BLOKKEER_SECONDEN = 15 * 60;
+
+async function registreerMislukteLogin(env, failKey, vorige) {
+  const count = ((vorige && vorige.count) || 0) + 1;
+  const until = Date.now() + LOGIN_BLOKKEER_SECONDEN * 1000;
+  try {
+    await env.FEEDBACKLOOP_KV.put(failKey, JSON.stringify({ count, until }), { expirationTtl: LOGIN_BLOKKEER_SECONDEN });
+  } catch {
+    // KV staat max. 1 schrijfactie per seconde per sleutel toe; bij een
+    // stortvloed aan pogingen faalt er wel eens één. De login blijft dan
+    // gewoon geweigerd, dus geen reden om hier te crashen.
+  }
+}
+
 const SESSION_TTL_REMEMBER = 60 * 60 * 24 * 30; // 30 dagen ("blijf aangemeld")
 const SESSION_TTL_DEFAULT = 60 * 60 * 12; // 12 uur
 
@@ -865,13 +899,30 @@ function randomToken() {
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// De sessie wordt bij elke aanvraag getoetst aan het gebruikersrecord. Zo is
+// een verwijderde gebruiker meteen afgemeld (in plaats van tot 30 dagen later,
+// wanneer zijn sessie vanzelf vervalt), en geldt een gewijzigde rol (admin naar
+// user) meteen. Kost één extra KV-read per aanvraag.
 async function getSession(request, env) {
   const token = request.headers.get('X-Auth-Token') || '';
   if (!token) return null;
   const raw = await env.FEEDBACKLOOP_KV.get(`session:${token}`);
   if (!raw) return null;
+  let sessie;
   try {
-    return JSON.parse(raw);
+    sessie = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!sessie || !sessie.username) return null;
+  const userRaw = await env.FEEDBACKLOOP_KV.get(`user:${sessie.username}`);
+  if (!userRaw) {
+    await env.FEEDBACKLOOP_KV.delete(`session:${token}`).catch(() => {});
+    return null;
+  }
+  try {
+    const user = JSON.parse(userRaw);
+    return { username: user.username || sessie.username, role: user.role || sessie.role };
   } catch {
     return null;
   }
@@ -888,20 +939,39 @@ async function handleLogin(body, env) {
     return jsonResponse({ error: 'PASSWORD_PEPPER ontbreekt (wrangler secret put PASSWORD_PEPPER).' }, 500);
   }
 
+  const failKey = `loginfail:${username.toLowerCase()}`;
+  let vorigeMislukkingen = null;
+  try {
+    vorigeMislukkingen = await env.FEEDBACKLOOP_KV.get(failKey, 'json');
+  } catch {
+    vorigeMislukkingen = null;
+  }
+  if (vorigeMislukkingen && vorigeMislukkingen.count >= LOGIN_MAX_POGINGEN && vorigeMislukkingen.until > Date.now()) {
+    const minuten = Math.max(1, Math.ceil((vorigeMislukkingen.until - Date.now()) / 60000));
+    return jsonResponse({ error: `Te veel mislukte pogingen. Probeer het opnieuw over ${minuten} minuten.` }, 429);
+  }
+  const weiger = async () => {
+    await registreerMislukteLogin(env, failKey, vorigeMislukkingen);
+    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+  };
+
   const userRaw = await env.FEEDBACKLOOP_KV.get(`user:${username}`);
   if (!userRaw) {
-    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+    return weiger();
   }
   let user;
   try {
     user = JSON.parse(userRaw);
   } catch {
-    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+    return weiger();
   }
 
   const hash = await sha256Hex(password + env.PASSWORD_PEPPER);
   if (hash !== user.passwordHash) {
-    return jsonResponse({ error: 'Onbekende gebruikersnaam of fout wachtwoord.' }, 401);
+    return weiger();
+  }
+  if (vorigeMislukkingen) {
+    await env.FEEDBACKLOOP_KV.delete(failKey).catch(() => {});
   }
 
   const token = randomToken();
@@ -927,6 +997,50 @@ async function handleLogout(request, env) {
 // voegen of bij te werken zonder wrangler-commando's. Upsert per username:
 // bestaande gebruikers die niet in het bestand voorkomen blijven ongewijzigd
 // (geen volledige vervanging van alle user:* records in de KV).
+async function lijstGebruikers(env) {
+  const uit = [];
+  let cursor;
+  do {
+    const page = await env.FEEDBACKLOOP_KV.list({ prefix: 'user:', cursor });
+    const records = await Promise.all(page.keys.map((k) => env.FEEDBACKLOOP_KV.get(k.name, 'json')));
+    records.forEach((r, i) => {
+      const naam = (r && r.username) || page.keys[i].name.slice('user:'.length);
+      uit.push({ username: naam, role: (r && r.role) || 'user' });
+    });
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  uit.sort((a, b) => a.username.localeCompare(b.username, 'nl', { sensitivity: 'base' }));
+  return uit;
+}
+
+// Geeft enkel naam en rol terug, nooit de wachtwoord-hash.
+async function handleAdminListUsers(env) {
+  return jsonResponse({ users: await lijstGebruikers(env) });
+}
+
+// Verwijderen kon vroeger alleen via de commandolijn. De openstaande sessies van
+// de gebruiker vervallen meteen, omdat getSession het gebruikersrecord toetst.
+// Twee vangnetten: je kan jezelf niet verwijderen, en de laatste admin ook niet
+// (anders kan niemand nog opladen of gebruikers beheren).
+async function handleAdminDeleteUser(body, env, session) {
+  const username = (body.username || '').trim();
+  if (!username) return jsonResponse({ error: 'Geen gebruikersnaam opgegeven.' }, 400);
+  if (username === session.username) {
+    return jsonResponse({ error: 'Je kan je eigen account niet verwijderen.' }, 400);
+  }
+  const raw = await env.FEEDBACKLOOP_KV.get(`user:${username}`, 'json');
+  if (!raw) return jsonResponse({ error: `Gebruiker "${username}" bestaat niet.` }, 404);
+  if (raw.role === 'admin') {
+    const admins = (await lijstGebruikers(env)).filter((u) => u.role === 'admin');
+    if (admins.length <= 1) {
+      return jsonResponse({ error: 'Dit is de laatste admin en kan niet verwijderd worden.' }, 400);
+    }
+  }
+  await env.FEEDBACKLOOP_KV.delete(`user:${username}`);
+  await env.FEEDBACKLOOP_KV.delete(`loginfail:${username.toLowerCase()}`).catch(() => {});
+  return jsonResponse({ deleted: username });
+}
+
 async function handleAdminUpsertUsers(body, env) {
   if (!env.PASSWORD_PEPPER) {
     return jsonResponse({ error: 'PASSWORD_PEPPER ontbreekt (wrangler secret put PASSWORD_PEPPER).' }, 500);

@@ -416,6 +416,7 @@ const usersFileInput = document.getElementById('usersFileInput');
 const usersFname = document.getElementById('usersFname');
 const usersUpdateBtn = document.getElementById('usersUpdateBtn');
 const usersStatus = document.getElementById('usersStatus');
+const usersList = document.getElementById('usersList');
 const cacheCard = document.getElementById('cacheCard');
 const cacheResetBtn = document.getElementById('cacheResetBtn');
 const cacheResetExistingBtn = document.getElementById('cacheResetExistingBtn');
@@ -462,6 +463,7 @@ function showApp(username, role) {
   uploadCard.hidden = !isAdmin;
   filterCard.hidden = true;
   usersCard.hidden = !isAdmin;
+  if (isAdmin) laadGebruikersLijst();
   if (synCard) synCard.hidden = !isAdmin;
   cacheCard.hidden = !isAdmin;
   userPlaceholderCard.hidden = true;
@@ -685,6 +687,63 @@ async function handleFiles(fileList) {
 // ============================================================
 let parsedUserRows = [];
 
+// Lijst van de huidige gebruikers met een verwijderknop. Verwijderen kon vroeger
+// alleen via de commandolijn; de Worker weigert zelf het eigen account en de
+// laatste admin, en meldt de verwijderde gebruiker meteen overal af.
+async function laadGebruikersLijst() {
+  if (!usersList) return;
+  try {
+    const { ok, status, data } = await authRequest({ mode: 'admin_list_users' });
+    if (status === 401 || status === 403) return;
+    if (!ok) {
+      usersList.innerHTML = `<p class="status err">${escapeHtml((data && data.error) || 'Kon de gebruikers niet laden.')}</p>`;
+      return;
+    }
+    const users = (data && data.users) || [];
+    if (!users.length) {
+      usersList.innerHTML = '<p class="status">Nog geen gebruikers.</p>';
+      return;
+    }
+    const aantalAdmins = users.filter((u) => u.role === 'admin').length;
+    usersList.innerHTML = users.map((u) => {
+      const jij = u.username === authUsername;
+      const laatsteAdmin = u.role === 'admin' && aantalAdmins <= 1;
+      const reden = jij ? 'Je kan je eigen account niet verwijderen' : (laatsteAdmin ? 'De laatste admin kan niet verwijderd worden' : '');
+      return `<div class="users-row">
+        <span class="users-naam">${escapeHtml(u.username)}${jij ? ' <span class="users-jij">(jij)</span>' : ''}</span>
+        <span class="pill ${u.role === 'admin' ? 'issue' : 'neutral'}">${escapeHtml(u.role)}</span>
+        <button type="button" class="users-del" data-user="${escapeAttr(u.username)}"${reden ? ` disabled title="${escapeAttr(reden)}"` : ''}>Verwijderen</button>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    usersList.innerHTML = '<p class="status err">Kon de gebruikers niet laden.</p>';
+  }
+}
+
+if (usersList) {
+  usersList.addEventListener('click', async (e) => {
+    const knop = e.target.closest('.users-del');
+    if (!knop || knop.disabled) return;
+    const naam = knop.dataset.user;
+    if (!confirm(`Gebruiker "${naam}" verwijderen? Die wordt meteen overal afgemeld en kan niet meer aanmelden.`)) return;
+    knop.disabled = true;
+    try {
+      const { ok, status, data } = await authRequest({ mode: 'admin_delete_user', username: naam });
+      if (status === 401) { showLogin('Sessie verlopen — log opnieuw in.'); return; }
+      if (!ok) {
+        setUsersStatus((data && data.error) || 'Verwijderen mislukt.', true);
+        knop.disabled = false;
+        return;
+      }
+      setUsersStatus(`Gebruiker "${naam}" verwijderd.`);
+      laadGebruikersLijst();
+    } catch (err) {
+      setUsersStatus('Verwijderen mislukt: ' + err.message, true);
+      knop.disabled = false;
+    }
+  });
+}
+
 function setUsersStatus(msg, isErr) {
   usersStatus.textContent = msg;
   usersStatus.className = 'status' + (isErr ? ' err' : '');
@@ -752,6 +811,7 @@ usersUpdateBtn.addEventListener('click', async () => {
     usersUpdateBtn.disabled = false;
     // Bij succes (geen fouten) inklappen, net als de upload-kaart na een
     // geslaagde filter — bespaart plaats, samenvatting blijft zichtbaar.
+    laadGebruikersLijst();
     if (!(data.errors && data.errors.length)) {
       setCollapsed(usersBody, usersToggle, usersSummary, true, usersSummaryText());
     }

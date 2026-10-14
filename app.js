@@ -277,7 +277,20 @@ let aiResponseIssues = {};
 // de inhoud liggen of gewoon aan de limiet van het Anthropic-account: als
 // "outputRemaining" op 0 staat, zit je tegen het plafond en helpt geen enkele
 // batch-/concurrency-instelling nog.
-let aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: 0 };
+let aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: 0, kosten: 0, modellen: new Set(), terugval: '' };
+
+// Prijzen in USD per miljoen tokens. Het model komt per aanroep mee terug van
+// de Worker (diagnostics.model), dus de kostenschatting klopt ook als het
+// model ooit via CLAUDE_MODEL of de terugvaloptie wijzigt. Cache-tokens staan
+// los van "input"; cacheWrite = 5-minutencache.
+const AI_PRIJZEN = [
+  { prefix: 'claude-sonnet-5-5', input: 2, cacheWrite: 2.5, cacheRead: 0.1, output: 10 },
+  { prefix: 'claude-sonnet-4', input: 3, cacheWrite: 3.75, cacheRead: 0.3, output: 15 },
+];
+function aiPrijsVoor(model) {
+  const m = String(model || '');
+  return AI_PRIJZEN.find((p) => m.startsWith(p.prefix)) || AI_PRIJZEN[0];
+}
 
 // Vaste taxonomie (domein + onderwerp) waarmee de AI elke opmerking
 // classificeert i.p.v. zelf vrije "themes" te verzinnen — zie worker.js
@@ -1155,7 +1168,7 @@ filterBtn.addEventListener('click', async () => {
   lastAgg = agg;
   cacheWriteStats = { attempted: 0, succeeded: 0, failed: 0, firstError: '' };
   aiResponseIssues = {};
-  aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now() };
+  aiUsageStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, limits: null, minOutputRemaining: null, startedAt: Date.now(), kosten: 0, modellen: new Set(), terugval: '' };
 
   const cats = Object.keys(CATEGORY_LABELS);
 
@@ -1362,13 +1375,8 @@ filterBtn.addEventListener('click', async () => {
   if (aiUsageStats.calls) {
     const duurSec = aiUsageStats.startedAt ? Math.round((Date.now() - aiUsageStats.startedAt) / 1000) : 0;
     const duurTxt = duurSec >= 60 ? `${Math.floor(duurSec / 60)}m${String(duurSec % 60).padStart(2, '0')}s` : `${duurSec}s`;
-    // Prijzen per miljoen tokens: input $3, cache-write $3,75, cache-read
-    // $0,30, output $15. Cache-tokens staan los van "input_tokens".
-    const kosten =
-      (aiUsageStats.inputTokens / 1e6) * 3 +
-      (aiUsageStats.cacheWriteTokens / 1e6) * 3.75 +
-      (aiUsageStats.cacheReadTokens / 1e6) * 0.3 +
-      (aiUsageStats.outputTokens / 1e6) * 15;
+    // Per aanroep berekend tegen de prijs van het gebruikte model (zie AI_PRIJZEN).
+    const kosten = aiUsageStats.kosten;
     usageNote = ` Duur: ${duurTxt} voor ${aiUsageStats.calls} AI-aanroep(en). ` +
       `Tokens: ${aiUsageStats.inputTokens.toLocaleString('nl-BE')} input, ` +
       `${aiUsageStats.outputTokens.toLocaleString('nl-BE')} output`;
@@ -1377,6 +1385,10 @@ filterBtn.addEventListener('click', async () => {
         `(${aiUsageStats.cacheWriteTokens.toLocaleString('nl-BE')} weggeschreven)`;
     }
     usageNote += ` — ± $${kosten.toFixed(2)}.`;
+    if (aiUsageStats.modellen.size) usageNote += ` Model: ${[...aiUsageStats.modellen].join(', ')}.`;
+    if (aiUsageStats.terugval) {
+      usageNote += ` Let op: het standaardmodel werd geweigerd, deze run liep (deels) op het reservemodel (${aiUsageStats.terugval}).`;
+    }
   }
   if (failed.length) {
     setStatus(`Analyse deels mislukt voor: ${failed.join(', ')}. De andere categorieën zijn wel bijgewerkt.${cacheNote}${aiNote}${hergebruikNote}${bijwerkNote}${usageNote}`, true);
@@ -1903,7 +1915,9 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     if (!aiResponseIssues[cat]) aiResponseIssues[cat] = { missingIds: 0, totalIds: 0, stopReasons: new Set() };
     aiResponseIssues[cat].missingIds += d.missingIds || 0;
     aiResponseIssues[cat].totalIds += d.totalIds || 0;
-    if (d.stopReason && d.stopReason !== 'tool_use') aiResponseIssues[cat].stopReasons.add(d.stopReason);
+    // "tool_use" (oude modellen) en "end_turn" (structured output op de
+    // nieuwe modellen) zijn allebei een normaal, volledig antwoord.
+    if (d.stopReason && d.stopReason !== 'tool_use' && d.stopReason !== 'end_turn') aiResponseIssues[cat].stopReasons.add(d.stopReason);
     if (d.detail && (d.detail.existingMissing || d.detail.prospectMissing)) {
       // Eén regel per problematische aanroep, zichtbaar in de console — genoeg
       // om te zien of de lijsten leeg waren dan wel gevuld met andere ids.
@@ -1919,6 +1933,14 @@ async function fetchAnalysisBatch(cat, existingRemarks, prospectingRemarks, pote
     aiUsageStats.outputTokens += d.outputTokens || 0;
     aiUsageStats.cacheReadTokens += d.cacheReadTokens || 0;
     aiUsageStats.cacheWriteTokens += d.cacheWriteTokens || 0;
+    const prijs = aiPrijsVoor(d.model);
+    aiUsageStats.kosten +=
+      ((d.inputTokens || 0) / 1e6) * prijs.input +
+      ((d.cacheWriteTokens || 0) / 1e6) * prijs.cacheWrite +
+      ((d.cacheReadTokens || 0) / 1e6) * prijs.cacheRead +
+      ((d.outputTokens || 0) / 1e6) * prijs.output;
+    if (d.model) aiUsageStats.modellen.add(d.model);
+    if (d.modelTerugval && !aiUsageStats.terugval) aiUsageStats.terugval = d.modelTerugval;
     if (d.rateLimits) {
       aiUsageStats.limits = d.rateLimits;
       const rem = parseInt(d.rateLimits.outputRemaining, 10);

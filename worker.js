@@ -235,6 +235,104 @@ const GLOBAL_SUMMARY_TOOL = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Modelkeuze en request-opbouw.
+//
+// claude-sonnet-4-5 gaat met pensioen (aangekondigd: 30/11/2026). Opvolger is
+// claude-sonnet-5-5, maar die aanvaardt twee dingen niet meer die deze Worker
+// altijd meestuurde (elk geeft een 400-fout):
+//   - "temperature" (vanaf de 4.7-generatie);
+//   - een afgedwongen tool-keuze (tool_choice type "tool");
+// en hij denkt standaard eerst na ("adaptive thinking"), wat trager en duurder
+// is zonder dat een vaste classificatie daar beter van wordt.
+// Daarom twee varianten van dezelfde aanroep:
+//   - oude modellen (t.e.m. x-4-6): exact zoals voorheen (temperature 0 +
+//     afgedwongen tool), zodat CLAUDE_MODEL=claude-sonnet-4-6 een veilige
+//     terugvaloptie blijft zonder codewijziging;
+//   - nieuwe modellen: hetzelfde schema als "structured output"
+//     (output_config.format), up-front denken uit (thinking "between_tools")
+//     en een vast effort-niveau. Het antwoord komt dan als JSON-tekst terug
+//     i.p.v. als tool-aanroep; leesAiAntwoord() maakt beide gelijk.
+// Overschrijfbaar via Cloudflare-variabelen CLAUDE_MODEL en CLAUDE_EFFORT.
+// ---------------------------------------------------------------------------
+const DEFAULT_MODEL = 'claude-sonnet-5-5';
+const DEFAULT_EFFORT = 'high';
+// Vangnet: weigert het nieuwe model de aanvraag zelf (400/404, bv. omdat de
+// API nog iets wijzigt), dan doet de analyse één nieuwe poging met dit
+// bewezen model (oude variant). Het gebruikte model staat in de
+// diagnostics en wordt na een upload getoond, zodat dit niet onopgemerkt blijft.
+// claude-sonnet-4-6 blijft beschikbaar tot minstens 17/02/2027.
+const FALLBACK_MODEL = 'claude-sonnet-4-6';
+
+function kiesModel(env) {
+  return (env.CLAUDE_MODEL || '').trim() || DEFAULT_MODEL;
+}
+
+// true = model dat nog temperature en een afgedwongen tool_choice aanvaardt
+// (Claude 3.x en 4.0 t.e.m. 4.6). Onbekende/nieuwere namen: false.
+function isOudModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (/^claude-\d+-/.test(m)) return true; // oude naamgeving, bv. claude-3-7-sonnet-…
+  const v = m.match(/^claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?:-|$)/);
+  if (!v) return false;
+  const major = Number(v[1]);
+  const minor = v[2] !== undefined ? Number(v[2]) : 0;
+  return major < 4 || (major === 4 && minor < 7);
+}
+
+// Structured outputs eisen additionalProperties:false op elk object. Het
+// toolschema blijft de enige bron; dit maakt er een strikte kopie van.
+function strikSchema(node) {
+  if (Array.isArray(node)) return node.map(strikSchema);
+  if (!node || typeof node !== 'object') return node;
+  const uit = {};
+  for (const [k, v] of Object.entries(node)) uit[k] = strikSchema(v);
+  if (uit.type === 'object') uit.additionalProperties = false;
+  return uit;
+}
+
+// Bouwt de request-body voor de Messages API. warm_cache en de analyse gaan
+// allebei door deze functie, zodat hun prefix (schema + system) byte-voor-byte
+// gelijk blijft en de prompt cache blijft aanslaan.
+function bouwClaudeBody(env, model, { tool, system, userContent, maxTokens }) {
+  const body = { model, max_tokens: maxTokens };
+  if (isOudModel(model)) {
+    body.temperature = 0;
+    body.tools = [tool];
+    body.tool_choice = { type: 'tool', name: tool.name };
+  } else {
+    // Zelfde tekst telt op de nieuwe generatie ~30% meer tokens; ruimer
+    // plafond zodat een volle batch niet wordt afgekapt (betaald wordt
+    // enkel wat effectief gegenereerd wordt).
+    body.max_tokens = Math.ceil(maxTokens * 1.5);
+    body.thinking = { type: 'between_tools' };
+    body.output_config = {
+      effort: (env.CLAUDE_EFFORT || '').trim() || DEFAULT_EFFORT,
+      format: { type: 'json_schema', schema: strikSchema(tool.input_schema) },
+    };
+  }
+  if (system) body.system = system;
+  body.messages = [{ role: 'user', content: userContent }];
+  return body;
+}
+
+// Haalt het gestructureerde antwoord uit de API-respons, ongeacht welke
+// variant gebruikt werd. Geeft { input } of { fout }.
+function leesAiAntwoord(data) {
+  const blokken = data.content || [];
+  const toolUse = blokken.find((b) => b.type === 'tool_use');
+  if (toolUse) return { input: toolUse.input || {} };
+  if (data.stop_reason === 'refusal') return { fout: 'Claude weigerde deze batch (stop_reason "refusal").' };
+  const tekst = blokken.filter((b) => b.type === 'text').map((b) => b.text || '').join('').trim();
+  if (!tekst) return { fout: 'Geen gestructureerd antwoord ontvangen van Claude.' };
+  try {
+    return { input: JSON.parse(tekst) };
+  } catch (e) {
+    const afgekapt = data.stop_reason === 'max_tokens' ? ' (afgekapt door max_tokens)' : '';
+    return { fout: `Antwoord van Claude was geen geldige JSON${afgekapt}.` };
+  }
+}
+
 const ALLOWED_ORIGIN = '*';
 
 export default {
@@ -287,7 +385,7 @@ export default {
         return jsonResponse({ error: 'Enkel toegankelijk voor admins.' }, 403);
       }
       if (!env.ANTHROPIC_API_KEY) return jsonResponse({ error: 'Geen API-sleutel geconfigureerd.' }, 500);
-      const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+      const model = kiesModel(env);
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 20000);
@@ -299,16 +397,14 @@ export default {
               'x-api-key': env.ANTHROPIC_API_KEY,
               'anthropic-version': '2023-06-01',
             },
-            body: JSON.stringify({
-              model,
-              max_tokens: 1,
-              temperature: 0,
-              tools: [ANALYSIS_TOOL],
+            body: JSON.stringify(bouwClaudeBody(env, model, {
+              tool: ANALYSIS_TOOL,
               system: [
                 { type: 'text', text: getStaticInstructions(), cache_control: { type: 'ephemeral' } },
               ],
-              messages: [{ role: 'user', content: 'ping' }],
-            }),
+              userContent: 'ping',
+              maxTokens: 1,
+            })),
             signal: controller.signal,
           });
         } finally {
@@ -418,7 +514,8 @@ export default {
     const prospectingFmt = formatRemarksWithIds(prospecting.remarks, 'P');
     const prospectingText = prospectingFmt.text;
     const userMessage = buildUserMessage(category, existingFmt.text, existingFmt.ids, prospectingText, prospecting.potentialSum);
-    const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+    let model = kiesModel(env);
+    let modelTerugval = '';
 
     try {
       // Zonder timeout kan een trage/hangende Claude-aanroep de hele
@@ -429,44 +526,53 @@ export default {
       // client (fetchAnalysisBatch in app.js) dat als tijdelijke fout
       // herkent en automatisch een nieuwe poging doet.
       const ANALYZE_TIMEOUT_MS = 90000;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
+      const roepClaude = async (m) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
+        try {
+          return await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify(bouwClaudeBody(env, m, {
+              tool: ANALYSIS_TOOL,
+              maxTokens: 8192,
+              // cache_control op het laatste system-blok cachet alles ervoor,
+              // dus ook het toolschema. Alle categorieën/batches van één
+              // "Opladen"-run delen zo één cache-entry.
+              system: [
+                {
+                  type: 'text',
+                  text: getStaticInstructions(),
+                  cache_control: { type: 'ephemeral' },
+                },
+              ],
+              userContent: userMessage,
+            })),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      };
       let apiRes;
       try {
-        apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 8192,
-            temperature: 0,
-            tools: [ANALYSIS_TOOL],
-            tool_choice: { type: 'tool', name: 'submit_analysis' },
-            // cache_control op het laatste system-blok cachet alles ervoor,
-            // dus ook het toolschema. Alle categorieën/batches van één
-            // "Opladen"-run delen zo één cache-entry.
-            system: [
-              {
-                type: 'text',
-                text: getStaticInstructions(),
-                cache_control: { type: 'ephemeral' },
-              },
-            ],
-            messages: [{ role: 'user', content: userMessage }],
-          }),
-          signal: controller.signal,
-        });
+        apiRes = await roepClaude(model);
+        if ((apiRes.status === 400 || apiRes.status === 404) && !isOudModel(model)) {
+          const foutTekst = await apiRes.text();
+          modelTerugval = `${model} gaf ${apiRes.status}: ${foutTekst.slice(0, 300)}`;
+          console.warn(`[${category}] ${modelTerugval} — nieuwe poging met ${FALLBACK_MODEL}`);
+          model = FALLBACK_MODEL;
+          apiRes = await roepClaude(model);
+        }
       } catch (fetchErr) {
         if (fetchErr.name === 'AbortError') {
           return jsonResponse({ error: `Claude API timeout na ${ANALYZE_TIMEOUT_MS / 1000}s (categorie: ${category}).` }, 504);
         }
         throw fetchErr;
-      } finally {
-        clearTimeout(timeoutId);
       }
 
       // Anthropic stuurt bij elk antwoord (ook bij fouten) de actuele
@@ -490,10 +596,14 @@ export default {
       }
 
       const data = await apiRes.json();
-      const toolUse = (data.content || []).find((b) => b.type === 'tool_use');
-      if (!toolUse) {
-        return jsonResponse({ error: 'Geen gestructureerd antwoord ontvangen van Claude.' }, 502);
+      const antwoord = leesAiAntwoord(data);
+      if (antwoord.fout) {
+        // 502 = tijdelijke fout voor de client: die probeert opnieuw en splitst
+        // de batch zo nodig (zie fetchAnalysisBatch in app.js).
+        return jsonResponse({ error: antwoord.fout, rateLimits }, 502);
       }
+      // Zelfde vorm als vroeger (toolUse.input), zodat de rest ongewijzigd blijft.
+      const toolUse = { input: antwoord.input };
       // Volledigheids-check: hoort exact één customer_sentiments-entry per
       // verstuurd opmerking-id te krijgen (zie formatRemarksWithIds hieronder).
       // Een tekort blokkeert de analyse niet — een onvolledig antwoord is nog
@@ -676,6 +786,8 @@ export default {
             idsVerwacht: existingFmt.ids.slice(0, 4).concat(prospectingFmt.ids.slice(0, 4)),
             idsTerug: [...gotIds].slice(0, 4).concat([...gotProspectIds].slice(0, 4)),
           },
+          model: data.model || model,
+          modelTerugval,
           inputTokens: data.usage?.input_tokens || 0,
           outputTokens: data.usage?.output_tokens || 0,
           cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
@@ -786,7 +898,7 @@ function formatRemarksWithIds(remarks, prefix = 'R') {
 async function handleGlobalSummary(body, env) {
   const categories = Array.isArray(body.categories) ? body.categories : [];
   const prompt = buildGlobalSummaryPrompt(categories);
-  const model = env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+  const model = kiesModel(env);
 
   try {
     const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -796,14 +908,11 @@ async function handleGlobalSummary(body, env) {
         'x-api-key': env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: 1024,
-        temperature: 0,
-        tools: [GLOBAL_SUMMARY_TOOL],
-        tool_choice: { type: 'tool', name: 'submit_global_summary' },
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      body: JSON.stringify(bouwClaudeBody(env, model, {
+        tool: GLOBAL_SUMMARY_TOOL,
+        userContent: prompt,
+        maxTokens: 1024,
+      })),
     });
 
     if (!apiRes.ok) {
@@ -812,11 +921,11 @@ async function handleGlobalSummary(body, env) {
     }
 
     const data = await apiRes.json();
-    const toolUse = (data.content || []).find((b) => b.type === 'tool_use');
-    if (!toolUse) {
-      return jsonResponse({ error: 'Geen samenvatting ontvangen van Claude.' }, 502);
+    const antwoord = leesAiAntwoord(data);
+    if (antwoord.fout) {
+      return jsonResponse({ error: 'Geen samenvatting ontvangen van Claude: ' + antwoord.fout }, 502);
     }
-    return jsonResponse({ summary: toolUse.input.summary });
+    return jsonResponse({ summary: antwoord.input.summary });
   } catch (err) {
     return jsonResponse({ error: 'Onverwachte fout: ' + err.message }, 500);
   }
